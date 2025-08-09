@@ -1,0 +1,22 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String         @id @default(cuid())
+  name        String
+  email       String         @unique
+  password    String?        // null if using Google OAuth only
+  provider    String?        // e.g. 'google', 'local'
+  providerId  String?        // Google user ID if Google auth
+  // pages       Page[]         @relation("UserPages")
+  // managedPages PageManager[] // Pages where user is a manager
+  // socialTokens SocialToken[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}

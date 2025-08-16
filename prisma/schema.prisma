@@ -8,97 +8,92 @@ datasource db {
 }
 
 model User {
-  id              String         @id @default(uuid())
-  email           String         @unique
-  password        String?
-  firstName       String?
-  lastName        String?
-  name            String?
+  id        String  @id @default(uuid())
+  email     String  @unique
+  password  String?
+  firstName String
+  lastName  String
 
   // OAuth
-  provider        String?        // e.g., "google", "facebook"
-  providerId      String?
+  googleId String?      @unique
+  avatar   String?
+  provider AuthProvider @default(LOCAL)
 
   // Account Management
-  isActive        Boolean        @default(true)
-  emailVerified   Boolean        @default(false)
-  accountStatus   AccountStatus  @default(ACTIVE)
-  lastLogin       DateTime?
+  isActive      Boolean       @default(true)
+  emailVerified Boolean       @default(false)
+  accountStatus AccountStatus @default(ACTIVE)
+  lastLogin     DateTime?
 
   // Relations
-  profile         UserProfile?
+  profile        UserProfile?
   // pages           Page[]         @relation("UserPages")
   // managedPages    PageManager[]
   // socialTokens    SocialToken[]
-  refreshTokens   RefreshToken[]
-  emailTokens     EmailVerificationToken[]
-  passwordResets  PasswordResetToken[]
+  refreshTokens  RefreshToken[]
+  emailTokens    EmailVerificationToken[]
+  passwordResets PasswordResetToken[]
   // socialAccounts  SocialMediaAccount[]
 
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model UserProfile {
-  id                  String            @id @default(uuid())
-  userId              String            @unique
-  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  avatar              String?
-  bio                 String?
-  timezone            String            @default("UTC")
-  locale              String            @default("en")
-
+  id       String  @id @default(uuid())
+  userId   String  @unique
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  avatar   String?
+  bio      String?
   // Subscription
-  subscriptionTier    SubscriptionTier  @default(FREE)
-  subscriptionEndsAt  DateTime?
+  subscriptionTier   SubscriptionTier @default(FREE)
+  subscriptionEndsAt DateTime?
 
   // Preferences
-  notifications       Json              @default("{}")
+  notifications Json @default("{}")
 
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // Refresh tokens for JWT auth
 model RefreshToken {
-  id          String   @id @default(uuid())
-  token       String   @unique
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deviceInfo  String?
-  ipAddress   String?
-  userAgent   String?
-  expiresAt   DateTime
-  isRevoked   Boolean  @default(false)
-  createdAt   DateTime @default(now())
-
-  @@map("refresh_tokens")
+  id         String   @id @default(uuid())
+  token      String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceInfo String?
+  ipAddress  String?
+  userAgent  String?
+  expiresAt  DateTime
+  isRevoked  Boolean  @default(false)
+  createdAt  DateTime @default(now())
 }
 
 // Email verification tokens
 model EmailVerificationToken {
-  id         String   @id @default(uuid())
-  token      String   @unique
-  email      String
-  userId     String?
-  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt  DateTime
-  used       Boolean  @default(false)
-  createdAt  DateTime @default(now())
+  id        String   @id @default(uuid())
+  token     String   @unique
+  email     String
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
 
   @@map("email_verification_tokens")
 }
 
 // Password reset tokens
 model PasswordResetToken {
-  id         String   @id @default(cuid())
-  token      String   @unique
-  email      String
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt  DateTime
-  used       Boolean  @default(false)
-  createdAt  DateTime @default(now())
+  id        String   @id @default(uuid())
+  token     String   @unique
+  email     String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
 }
 
 // Enums
@@ -129,3 +124,9 @@ enum AccountType {
   BUSINESS
   PAGE
 }
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+}
+

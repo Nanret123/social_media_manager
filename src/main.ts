@@ -3,12 +3,25 @@ import { AppModule } from './app.module';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { SwaggerModule } from '@nestjs/swagger';
 import { swaggerConfig } from './config/swagger.config';
+// import helmet from 'helmet';
+// import * as compression from 'compression';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  //  app.use(helmet());
+  // app.use(compression());
+
+  // CORS
+  // app.enableCors({
+  //   origin:
+  //     process.env.NODE_ENV === 'production' ? ['https://yourdomain.com'] : true,
+  //   credentials: true,
+  // });
+
+
   app.enableCors();
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api/v1');
 
   app.enableVersioning({
     type: VersioningType.URI,
@@ -28,6 +41,7 @@ async function bootstrap() {
       transform: true,
       whitelist: true,
       forbidNonWhitelisted: true,
+      //disableErrorMessages: process.env.NODE_ENV === 'production',
     }),
   );
 

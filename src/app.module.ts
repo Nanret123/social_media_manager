@@ -7,6 +7,7 @@ import { ConfigModule } from '@nestjs/config';
 import { UserModule } from './user/user.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
+import { SocialMediaModule } from './social-media/social-media.module';
 
 @Module({
   imports: [
@@ -25,6 +26,8 @@ import { ScheduleModule } from '@nestjs/schedule';
 
     // Task scheduling
     ScheduleModule.forRoot(),
+
+    SocialMediaModule,
   ],
   controllers: [AppController],
   providers: [AppService],

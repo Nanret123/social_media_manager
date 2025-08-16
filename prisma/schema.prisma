@@ -35,16 +35,24 @@ model User {
   passwordResets PasswordResetToken[]
   // socialAccounts  SocialMediaAccount[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  sentInvitations     ManagerInvitation[] @relation("InvitationSender")
+  receivedInvitations ManagerInvitation[] @relation("InvitationReceiver")
+  managedAccounts     AccountManager[]    @relation("Manager")
+  ownedAccountManagers AccountManager[]   @relation("Owner")
+
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  SocialMediaAccount SocialMediaAccount[]
+  Post               Post[]
+  PostSchedule       PostSchedule[]
 }
 
 model UserProfile {
-  id       String  @id @default(uuid())
-  userId   String  @unique
-  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  avatar   String?
-  bio      String?
+  id                 String           @id @default(uuid())
+  userId             String           @unique
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  avatar             String?
+  bio                String?
   // Subscription
   subscriptionTier   SubscriptionTier @default(FREE)
   subscriptionEndsAt DateTime?
@@ -96,6 +104,177 @@ model PasswordResetToken {
   createdAt DateTime @default(now())
 }
 
+model ManagerInvitation {
+  id          String            @id @default(cuid())
+  inviterId    String
+  inviter     User              @relation("InvitationSender", fields: [inviterId], references: [id], onDelete: Cascade)
+  
+  // Can invite by email (even if they don't have an account yet)
+  inviteeEmail String
+  inviteeId    String?
+  invitee      User?            @relation("InvitationReceiver", fields: [inviteeId], references: [id], onDelete: Cascade)
+  
+  // Which social accounts they're being invited to manage
+  socialAccountIds String[] @default([])
+  
+  // What permissions they'll have
+  permissions ManagerPermission[] @default([])
+  
+  // Invitation status
+  status      InvitationStatus @default(PENDING)
+  token       String           @unique // For email-based acceptance
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  
+  @@index([inviteeEmail])
+  @@index([token])
+}
+
+model AccountManager {
+  id              String        @id @default(cuid())
+  
+  // The owner of the social account
+  ownerId         String
+  owner           User          @relation("Owner", fields: [ownerId], references: [id], onDelete: Cascade)
+  
+  // The manager being given access
+  managerId       String
+  manager         User          @relation("Manager", fields: [managerId], references: [id], onDelete: Cascade)
+  
+  // The social account being managed
+  socialAccountId String
+  socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  
+  // Manager-specific permissions for this account
+  permissions     ManagerPermission[] @default([])
+  
+  // Status and metadata
+  isActive        Boolean       @default(true)
+  assignedAt      DateTime      @default(now())
+  lastAccessAt    DateTime?
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  // Ensure one manager per account relationship
+  @@unique([managerId, socialAccountId])
+  @@index([ownerId])
+  @@index([managerId])
+  @@index([socialAccountId])
+}
+
+model SocialMediaAccount {
+  id     String @id @default(cuid())
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // Platform info
+  platform    SocialPlatform
+  platformId  String
+  username    String?
+  displayName String?
+  profileUrl  String?
+
+  // OAuth tokens (encrypted in service layer)
+  accessToken    String
+  refreshToken   String?
+  tokenExpiresAt DateTime?
+
+  // Platform-specific data
+  platformData Json @default("{}")
+
+  // Platform permissions (what the platform allows)
+  platformPermissions  String[] @default([])
+  capabilities         String[] @default([])
+
+  // Account type and status
+  accountType      AccountType      @default(PERSONAL)
+  connectionStatus ConnectionStatus @default(ACTIVE)
+
+  // Health monitoring
+  lastSuccessfulSync DateTime?
+  lastFailedSync     DateTime?
+  failureCount       Int       @default(0)
+  errorMessage       String?
+
+  // Rate limiting info
+  rateLimitRemaining Int?
+  rateLimitResetTime DateTime?
+
+  // Metadata
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Post         Post[]
+  PostSchedule PostSchedule[]
+  
+  // NEW: Manager relationships
+  managers     AccountManager[]
+
+  @@unique([ownerId, platform, platformId])
+  @@index([connectionStatus])
+  @@index([ownerId, platform])
+}
+
+model Post {
+  id              String             @id @default(cuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccountId String
+  socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  // Content
+  content    String
+  mediaUrls  String[] @default([])
+  mediaTypes String[] @default([])
+
+  // Post status
+  status       PostStatus @default(DRAFT)
+  publishedAt  DateTime?
+  scheduledFor DateTime?
+
+  // Platform response
+  platformPostId String?
+  platformData   Json    @default("{}")
+  errorMessage   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([socialAccountId])
+}
+
+model PostSchedule {
+  id              String             @id @default(cuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccountId String
+  socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  // Schedule info
+  content      String
+  mediaUrls    String[] @default([])
+  scheduledFor DateTime
+  timezone     String   @default("UTC")
+
+  // Status
+  status       ScheduleStatus @default(PENDING)
+  processedAt  DateTime?
+  errorMessage String?
+  retryCount   Int            @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([scheduledFor])
+  @@index([status])
+}
+
 // Enums
 enum AccountStatus {
   ACTIVE
@@ -117,12 +296,14 @@ enum SocialPlatform {
   TWITTER
   LINKEDIN
   TIKTOK
+  YOUTUBE
 }
 
 enum AccountType {
   PERSONAL
   BUSINESS
   PAGE
+  CREATOR
 }
 
 enum AuthProvider {
@@ -130,3 +311,64 @@ enum AuthProvider {
   GOOGLE
 }
 
+enum ConnectionStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+  ERROR
+  RECONNECT_REQUIRED
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  DELETED
+}
+
+enum ScheduleStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ManagerPermission {
+  // Post permissions
+  CREATE_POSTS
+  EDIT_POSTS
+  DELETE_POSTS
+  PUBLISH_POSTS
+  SCHEDULE_POSTS
+  
+  // Content permissions
+  UPLOAD_MEDIA
+  MANAGE_CONTENT_LIBRARY
+  
+  // Engagement permissions
+  RESPOND_TO_COMMENTS
+  RESPOND_TO_MESSAGES
+  MODERATE_COMMENTS
+  
+  // Analytics permissions
+  VIEW_ANALYTICS
+  EXPORT_REPORTS
+  
+  // Account permissions
+  VIEW_ACCOUNT_SETTINGS
+  MANAGE_ACCOUNT_SETTINGS
+  
+  // Manager permissions
+  INVITE_OTHER_MANAGERS
+  MANAGE_MANAGER_PERMISSIONS
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}

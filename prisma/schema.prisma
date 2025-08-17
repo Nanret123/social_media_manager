@@ -23,28 +23,32 @@ model User {
   isActive      Boolean       @default(true)
   emailVerified Boolean       @default(false)
   accountStatus AccountStatus @default(ACTIVE)
-  lastLogin     DateTime?
 
   // Relations
   profile        UserProfile?
-  // pages           Page[]         @relation("UserPages")
-  // managedPages    PageManager[]
-  // socialTokens    SocialToken[]
   refreshTokens  RefreshToken[]
   emailTokens    EmailVerificationToken[]
   passwordResets PasswordResetToken[]
-  // socialAccounts  SocialMediaAccount[]
-
   sentInvitations     ManagerInvitation[] @relation("InvitationSender")
   receivedInvitations ManagerInvitation[] @relation("InvitationReceiver")
   managedAccounts     AccountManager[]    @relation("Manager")
   ownedAccountManagers AccountManager[]   @relation("Owner")
-
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
   SocialMediaAccount SocialMediaAccount[]
   Post               Post[]
   PostSchedule       PostSchedule[]
+  Message            Message[]
+  ContentTemplate    ContentTemplate[]
+  PostingRecommendation PostingRecommendation[]
+  Campaign           Campaign[]
+  Thread             Thread[]
+  Approval           Approval[] @relation("approver")
+  AnalyticsReport    AnalyticsReport[]
+  AIInsight          AIInsight[]
+  MediaAsset         MediaAsset[]
+  auditLogs           AuditLog[]
+
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 }
 
 model UserProfile {
@@ -58,13 +62,14 @@ model UserProfile {
   subscriptionEndsAt DateTime?
 
   // Preferences
-  notifications Json @default("{}")
+  notifications Json @default("{}") // Expected structure: { email: boolean, push: boolean, ... }
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([subscriptionTier, subscriptionEndsAt])
 }
 
-// Refresh tokens for JWT auth
 model RefreshToken {
   id         String   @id @default(uuid())
   token      String   @unique
@@ -78,7 +83,6 @@ model RefreshToken {
   createdAt  DateTime @default(now())
 }
 
-// Email verification tokens
 model EmailVerificationToken {
   id        String   @id @default(uuid())
   token     String   @unique
@@ -92,7 +96,6 @@ model EmailVerificationToken {
   @@map("email_verification_tokens")
 }
 
-// Password reset tokens
 model PasswordResetToken {
   id        String   @id @default(uuid())
   token     String   @unique
@@ -105,115 +108,106 @@ model PasswordResetToken {
 }
 
 model ManagerInvitation {
-  id          String            @id @default(cuid())
+  id          String            @id @default(uuid())
   inviterId    String
   inviter     User              @relation("InvitationSender", fields: [inviterId], references: [id], onDelete: Cascade)
-  
-  // Can invite by email (even if they don't have an account yet)
   inviteeEmail String
   inviteeId    String?
   invitee      User?            @relation("InvitationReceiver", fields: [inviteeId], references: [id], onDelete: Cascade)
-  
-  // Which social accounts they're being invited to manage
-  socialAccountIds String[] @default([])
-  
-  // What permissions they'll have
+  socialAccountIds String[] @default([]) // Supports multi-account invites
   permissions ManagerPermission[] @default([])
-  
-  // Invitation status
   status      InvitationStatus @default(PENDING)
-  token       String           @unique // For email-based acceptance
+  token       String           @unique
   expiresAt   DateTime
   acceptedAt  DateTime?
-  
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
-  
+
   @@index([inviteeEmail])
   @@index([token])
+  @@index([status, expiresAt])
 }
 
 model AccountManager {
-  id              String        @id @default(cuid())
-  
-  // The owner of the social account
+  id              String        @id @default(uuid())
   ownerId         String
   owner           User          @relation("Owner", fields: [ownerId], references: [id], onDelete: Cascade)
-  
-  // The manager being given access
   managerId       String
   manager         User          @relation("Manager", fields: [managerId], references: [id], onDelete: Cascade)
-  
-  // The social account being managed
   socialAccountId String
   socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
-  
-  // Manager-specific permissions for this account
   permissions     ManagerPermission[] @default([])
-  
-  // Status and metadata
   isActive        Boolean       @default(true)
   assignedAt      DateTime      @default(now())
-  lastAccessAt    DateTime?
-  
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
-  
-  // Ensure one manager per account relationship
+
   @@unique([managerId, socialAccountId])
   @@index([ownerId])
   @@index([managerId])
   @@index([socialAccountId])
+  @@index([isActive])
 }
 
 model SocialMediaAccount {
-  id     String @id @default(cuid())
-  ownerId String
-  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  id                 String             @id @default(uuid())
+  ownerId            String
+  owner              User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   // Platform info
-  platform    SocialPlatform
-  platformId  String
-  username    String?
-  displayName String?
-  profileUrl  String?
+  platform           SocialPlatform
+  platformId         String
+  username           String?
+  displayName        String?
+  profileUrl         String?
 
   // OAuth tokens (encrypted in service layer)
-  accessToken    String
-  refreshToken   String?
-  tokenExpiresAt DateTime?
+  accessToken        String
+  refreshToken       String?
+  tokenExpiresAt     DateTime?
+  lastRefreshAttempt DateTime?          // Tracks last token refresh attempt
+  apiTier            String?            // e.g., "Basic", "Pro" for X API
 
   // Platform-specific data
-  platformData Json @default("{}")
+  platformData       Json               @default("{}")
 
-  // Platform permissions (what the platform allows)
-  platformPermissions  String[] @default([])
-  capabilities         String[] @default([])
+  // Platform permissions
+  platformPermissions String[]          @default([])
+  capabilities        String[]          @default([])
 
   // Account type and status
-  accountType      AccountType      @default(PERSONAL)
-  connectionStatus ConnectionStatus @default(ACTIVE)
+  accountType         AccountType       @default(PERSONAL)
+  connectionStatus    ConnectionStatus  @default(ACTIVE)
 
   // Health monitoring
-  lastSuccessfulSync DateTime?
-  lastFailedSync     DateTime?
-  failureCount       Int       @default(0)
-  errorMessage       String?
+  lastSuccessfulSync  DateTime?
+  lastFailedSync      DateTime?
+  failureCount        Int               @default(0)
+  errorMessage        String?
+  lastRateLimitError String?            // Logs rate limit errors
 
   // Rate limiting info
-  rateLimitRemaining Int?
-  rateLimitResetTime DateTime?
+  rateLimitRemaining  Int?
+  rateLimitResetTime  DateTime?
+
+  // Team management
+  managerCount        Int               @default(0) // Track number of managers (max 5)
 
   // Metadata
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isActive           Boolean           @default(true)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
-  Post         Post[]
-  PostSchedule PostSchedule[]
-  
-  // NEW: Manager relationships
-  managers     AccountManager[]
+  // Relations
+  posts              Post[]
+  postSchedules      PostSchedule[]
+  managers           AccountManager[]
+  messages           Message[]
+  engagements        Engagement[]
+  postingRecommendations PostingRecommendation[]
+  campaigns          Campaign[]
+  aiInsights         AIInsight[]
+  threads            Thread[]
 
   @@unique([ownerId, platform, platformId])
   @@index([connectionStatus])
@@ -221,58 +215,275 @@ model SocialMediaAccount {
 }
 
 model Post {
-  id              String             @id @default(cuid())
+  id              String             @id @default(uuid())
   userId          String
   user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   socialAccountId String
   socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  threadId        String?
+  thread          Thread?            @relation("ThreadPosts", fields: [threadId], references: [id], onDelete: SetNull)
+  campaignId      String?
+  campaign        Campaign?          @relation("CampaignPosts", fields: [campaignId], references: [id], onDelete: SetNull)
 
   // Content
-  content    String
-  mediaUrls  String[] @default([])
-  mediaTypes String[] @default([])
+  content         String
+  captions        String?            // AI-generated captions
+  hashtags        String[]           @default([]) // AI-generated hashtags
+  mediaUrls       String[]           @default([])
+  mediaTypes      String[]           @default([])
+  isAIGenerated   Boolean            @default(false)
+  platformMediaId String?            // Platform-specific media ID after upload
+  uploadStatus    UploadStatus?      // Tracks media upload status
 
   // Post status
-  status       PostStatus @default(DRAFT)
-  publishedAt  DateTime?
-  scheduledFor DateTime?
+  status          PostStatus         @default(DRAFT)
+  publishedAt     DateTime?
+  scheduledFor    DateTime?
 
   // Platform response
-  platformPostId String?
-  platformData   Json    @default("{}")
-  errorMessage   String?
+  platformPostId  String?
+  platformData    Json               @default("{}")
+  errorMessage    String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  // Relations
+  engagements     Engagement[]
+  approvals       Approval[]
+  mediaAssets     MediaAsset[]       @relation("PostMedia")
+
+  @@index([userId])
+  @@index([socialAccountId])
+  @@index([threadId])
+  @@index([campaignId])
+  @@index([status])
+  @@index([scheduledFor])
+}
+
+model PostSchedule {
+  id              String             @id @default(uuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccountId String
+  socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  content         String
+  mediaAssets     MediaAsset[]       @relation("PostScheduleMedia")
+  scheduledFor    DateTime
+  timezone        String             @default("UTC")
+  status          ScheduleStatus     @default(PENDING)
+  processedAt     DateTime?
+  errorMessage    Json?              // Structured: { code: String, message: String }
+  retryCount      Int                @default(0)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([scheduledFor])
+  @@index([status])
+}
+
+model Message {
+  id              String         @id @default(uuid())
+  socialAccountId String
+  socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content         String
+  threadId        String?
+  senderId        String?
+  receiverId      String?
+  platform        SocialPlatform
+  status          MessageStatus  @default(UNREAD)
+  sentAt          DateTime
+  readAt          DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([socialAccountId])
+  @@index([threadId])
+  @@index([platform])
+  @@index([status])
+  @@index([sentAt])
+  // Note: Currently focused on FB/IG DMs, expandable to X/LinkedIn
+}
+
+model ContentTemplate {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  content         String
+  mediaUrls       String[]       @default([]) // TODO: Consider MediaAsset relation
+  mediaTypes      String[]       @default([])
+  platform        SocialPlatform?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([userId])
+  @@index([platform])
+}
+
+model Engagement {
+  id              String             @id @default(uuid())
+  postId          String
+  post            Post               @relation(fields: [postId], references: [id], onDelete: Cascade)
+  socialAccountId String
+  socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  likes           Int                @default(0)
+  shares          Int                @default(0)
+  comments        Int                @default(0)
+  clicks          Int                @default(0)
+  impressions     Int                @default(0)
+  platform        SocialPlatform
+  aiInsightId     String?            // Link to AIInsight for recommendations
+  aiInsight       AIInsight?         @relation(fields: [aiInsightId], references: [id], onDelete: SetNull)
+  recordedAt      DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([postId])
+  @@index([socialAccountId])
+  @@index([platform])
+  @@index([recordedAt])
+}
+
+model PostingRecommendation {
+  id              String             @id @default(uuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccountId String?
+  socialAccount   SocialMediaAccount? @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  recommendedTime DateTime?
+  contentSuggestion String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   @@index([userId])
   @@index([socialAccountId])
 }
 
-model PostSchedule {
-  id              String             @id @default(cuid())
+model Campaign {
+  id              String             @id @default(uuid())
   userId          String
   user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccountId String?
+  socialAccount   SocialMediaAccount? @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  name            String
+  description     String?
+  posts           Post[]             @relation("CampaignPosts")
+  startDate       DateTime?
+  endDate         DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  aiInsights      AIInsight[]
+
+  @@index([userId])
+  @@index([socialAccountId])
+  @@index([startDate, endDate])
+}
+
+
+model Thread {
+  id              String             @id @default(uuid())
   socialAccountId String
   socialAccount   SocialMediaAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  posts           Post[]             @relation("ThreadPosts")
+  title           String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
-  // Schedule info
-  content      String
-  mediaUrls    String[] @default([])
-  scheduledFor DateTime
-  timezone     String   @default("UTC")
+  @@index([socialAccountId])
+  @@index([userId])
+}
 
-  // Status
-  status       ScheduleStatus @default(PENDING)
-  processedAt  DateTime?
-  errorMessage String?
-  retryCount   Int            @default(0)
+model Approval {
+  id              String         @id @default(uuid())
+  postId          String
+  post            Post           @relation(fields: [postId], references: [id], onDelete: Cascade)
+  approverId      String
+  approver        User           @relation("approver", fields: [approverId], references: [id], onDelete: Cascade)
+  status          ApprovalStatus @default(PENDING)
+  comments        String?
+  approvedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@index([postId])
+  @@index([approverId])
+}
 
-  @@index([scheduledFor])
-  @@index([status])
+model AnalyticsReport {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  engagementIds   String[]
+  format          ReportFormat   @default(PDF)
+  title           String
+  generatedAt     DateTime       @default(now())
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([userId])
+}
+
+model AIInsight {
+  id              String             @id @default(uuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccountId String?
+  socialAccount   SocialMediaAccount? @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  campaignId      String?
+  campaign        Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  content         String
+  platform        SocialPlatform?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  engagements     Engagement[]
+
+  @@index([userId])
+  @@index([socialAccountId])
+  @@index([campaignId])
+}
+
+model MediaAsset {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url             String         // S3 URL (e.g., https://s3.amazonaws.com/bucket/key)
+  mediaType       MediaType
+  isAIGenerated   Boolean        @default(false)
+  metadata        Json           @default("{}") // S3 details: { bucket: String, key: String, ... }
+  platform        SocialPlatform?
+  fileName        String?        // Original file name (e.g., my-image.jpg)
+  fileSize        Int?           // Size in bytes
+  mimeType        String?        // e.g., image/jpeg, video/mp4
+  uploadStatus    UploadStatus   @default(PENDING)
+  uploadedAt      DateTime?      // When uploaded to S3
+  deletedAt       DateTime?      // Soft delete
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  posts           Post[]         @relation("PostMedia")
+  postSchedules   PostSchedule[] @relation("PostScheduleMedia")
+
+  @@index([userId])
+  @@index([platform])
+  @@index([uploadStatus])
+  @@index([mediaType])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action     String   // e.g., "POST_CREATED", "TOKEN_ACCESSED"
+  entityType String?
+  details    Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
 }
 
 // Enums
@@ -293,10 +504,8 @@ enum SubscriptionTier {
 enum SocialPlatform {
   FACEBOOK
   INSTAGRAM
-  TWITTER
+  X
   LINKEDIN
-  TIKTOK
-  YOUTUBE
 }
 
 enum AccountType {
@@ -336,31 +545,20 @@ enum ScheduleStatus {
 }
 
 enum ManagerPermission {
-  // Post permissions
   CREATE_POSTS
   EDIT_POSTS
   DELETE_POSTS
   PUBLISH_POSTS
   SCHEDULE_POSTS
-  
-  // Content permissions
   UPLOAD_MEDIA
   MANAGE_CONTENT_LIBRARY
-  
-  // Engagement permissions
   RESPOND_TO_COMMENTS
   RESPOND_TO_MESSAGES
   MODERATE_COMMENTS
-  
-  // Analytics permissions
   VIEW_ANALYTICS
   EXPORT_REPORTS
-  
-  // Account permissions
   VIEW_ACCOUNT_SETTINGS
   MANAGE_ACCOUNT_SETTINGS
-  
-  // Manager permissions
   INVITE_OTHER_MANAGERS
   MANAGE_MANAGER_PERMISSIONS
 }
@@ -371,4 +569,38 @@ enum InvitationStatus {
   DECLINED
   EXPIRED
   CANCELLED
+}
+
+enum MessageStatus {
+  UNREAD
+  READ
+  REPLIED
+  ARCHIVED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ReportFormat {
+  PDF
+  EXCEL
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  REEL
+  CAROUSEL
+  STORY
+}
+
+enum UploadStatus {
+  PENDING
+  UPLOADING
+  UPLOADED
+  FAILED
+  DELETED
 }

@@ -3,9 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { Strategy, ExtractJwt } from 'passport-jwt';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { JwtPayload } from '../interfaces/JwtPayload.interface';
 
 @Injectable()
-export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
+export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
@@ -13,24 +14,17 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get('JWT_ACCESS_SECRET'),
+      secretOrKey: configService.get<string>('JWT_SECRET'),
     });
   }
 
-  async validate(payload: any) {
+  async validate(payload: JwtPayload) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        emailVerified: true,
-        accountStatus: true,
-      },
+      include: { profile: true },
     });
 
-    if (!user || user.accountStatus !== 'ACTIVE') {
+    if (!user || !user.isActive) {
       throw new UnauthorizedException('User not found or inactive');
     }
 

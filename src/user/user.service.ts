@@ -20,8 +20,24 @@ export class UserService {
   async getUserProfile(userId: string): Promise<UserProfileResponse> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: {
-        profile: true,
+       select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        avatar: true,
+        provider: true,
+        emailVerified: true,
+        accountStatus: true,
+        profile: {
+          select: {
+            bio: true,
+            subscriptionTier: true,
+            subscriptionEndsAt: true,
+            notifications: true,
+          },
+        },
+        createdAt: true,
       },
     });
 
@@ -29,68 +45,40 @@ export class UserService {
       throw new NotFoundException('User not found');
     }
 
-    return {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      emailVerified: user.emailVerified,
-      accountStatus: user.accountStatus,
-      createdAt: user.createdAt,
-      lastLogin: user.lastLogin,
-      profile: {
-        avatar: user.profile?.avatar,
-        bio: user.profile?.bio,
-        subscriptionTier: user.profile?.subscriptionTier || 'FREE',
-        subscriptionEndsAt: user.profile?.subscriptionEndsAt,
-        notifications: user.profile?.notifications || {},
-      },
-    };
+    return user;
   }
 
-  async updateProfile(
+async updateProfile(
   userId: string,
   dto: UpdateProfile,
 ): Promise<UserProfileResponse> {
-  return await this.prisma.$transaction(async (tx) => {
-    // Ensure user exists
-    const user = await tx.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found');
+  const updatedUser = await this.prisma.user.update({
+    where: { id: userId },
+    data: {
+      ...(dto.firstName && { firstName: dto.firstName }),
+      ...(dto.lastName && { lastName: dto.lastName }),
+      ...(dto.avatar && { avatar: dto.avatar }),
 
-    // Update user
-    await tx.user.update({
-      where: { id: userId },
-      data: {
-        firstName: dto.firstName,
-        lastName: dto.lastName,
+      profile: {
+        upsert: {
+          update: {
+            ...(dto.bio && { bio: dto.bio }),
+            ...(dto.notifications && { notifications: dto.notifications }),
+          },
+          create: {
+            avatar: dto.avatar,
+            bio: dto.bio,
+            notifications: dto.notifications ?? {},
+          },
+        },
       },
-    });
-
-    // Upsert profile
-    await tx.userProfile.upsert({
-      where: { userId },
-      update: {
-        avatar: dto.avatar,
-        bio: dto.bio,
-        notifications: dto.notifications,
-      },
-      create: {
-        userId,
-        avatar: dto.avatar,
-        bio: dto.bio,
-        notifications: dto.notifications ?? {},
-      },
-    });
-
-    // Return final user with profile
-    const updatedUser = await tx.user.findUnique({
-      where: { id: userId },
-      include: { profile: true },
-    });
-
-    return this.formatUserProfile(updatedUser);
+    },
+    include: { profile: true },
   });
+
+  return this.formatUserProfile(updatedUser);
 }
+
 
   async changePassword(
     userId: string,
@@ -133,82 +121,6 @@ export class UserService {
     ]);
 
     return { message: 'Password successfully changed' };
-  }
-
-  async requestEmailChange(
-    userId: string,
-    dto: UpdateEmail,
-  ): Promise<{ message: string }> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(dto.password, user.password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Password is incorrect');
-    }
-
-    // Check if new email is already taken
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email: dto.newEmail },
-    });
-
-    if (existingUser) {
-      throw new BadRequestException('Email is already taken');
-    }
-
-    // Generate email change token
-    const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
-
-    await this.prisma.emailVerificationToken.create({
-      data: {
-        token,
-        email: dto.newEmail,
-        userId,
-        expiresAt,
-      },
-    });
-
-    // TODO: Send email change confirmation to new email
-    console.log(`Email change token for ${dto.newEmail}: ${token}`);
-
-    return {
-      message: 'Email change confirmation sent to your new email address',
-    };
-  }
-
-  async confirmEmailChange(token: string): Promise<{ message: string }> {
-    const emailToken = await this.prisma.emailVerificationToken.findUnique({
-      where: { token },
-      include: { user: true },
-    });
-
-    if (!emailToken || emailToken.used || emailToken.expiresAt < new Date()) {
-      throw new BadRequestException('Invalid or expired email change token');
-    }
-
-    // Update email and mark token as used
-    await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: emailToken.userId },
-        data: {
-          email: emailToken.email,
-          emailVerified: true, // Auto-verify since they confirmed via email
-        },
-      }),
-      this.prisma.emailVerificationToken.update({
-        where: { id: emailToken.id },
-        data: { used: true },
-      }),
-    ]);
-
-    return { message: 'Email successfully updated' };
   }
 
   async deactivateAccount(
@@ -369,7 +281,6 @@ export class UserService {
       //   accountType: account.accountType,
       // })),
       memberSince: user.createdAt,
-      lastActive: user.lastLogin,
     };
   }
 

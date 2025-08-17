@@ -15,7 +15,8 @@ import { TokenService } from './token.service';
 import { Login } from './dtos/Login.dto';
 import { ForgotPassword } from './dtos/ForgotPassword.dto';
 import { ResetPassword } from './dtos/ResetPassword.dto';
-import { GoogleService } from './google.service';
+import { AuthProvider, SubscriptionTier } from '@prisma/client';
+import { GoogleProfile } from './interfaces/GoogleProfile.interface';
 
 @Injectable()
 export class AuthService {
@@ -25,11 +26,10 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private config: ConfigService,
-    private tokenService: TokenService,
-    private googleService: GoogleService,
+    private tokenService: TokenService
   ) {}
 
-  async register(dto: Register): Promise<AuthResponse> {
+  async register(dto: Register, req?: any): Promise<AuthResponse> {
     // Check if user already exists
     const existingUser = await this.prisma.user.findUnique({
       where: { email: dto.email },
@@ -40,7 +40,10 @@ export class AuthService {
     }
 
     // Hash password
-    const hashedPassword = await bcrypt.hash(dto.password, this.saltRounds);
+    const hashedPassword = await bcrypt.hash(dto.password, 12);
+
+    // Extract device info
+    const deviceInfo = this.extractDeviceInfo(req);
 
     // Create user and profile in transaction
     const result = await this.prisma.$transaction(async (tx) => {
@@ -50,113 +53,146 @@ export class AuthService {
           password: hashedPassword,
           firstName: dto.firstName,
           lastName: dto.lastName,
+          avatar: dto.avatar,
+          provider: AuthProvider.LOCAL,
+          profile: {
+            create: {
+              avatar: dto.avatar,
+              subscriptionTier: SubscriptionTier.FREE,
+            },
+          },
         },
-        include: {
-          profile: true,
-        },
+        include: { profile: true },
       });
+
+      // Generate email verification token
+      const emailToken = await this.generateEmailVerificationToken(user.email, user.id, tx);
+      
+      // Send verification email
+      // await this.emailService.sendEmailVerification(user.email, user.firstName, emailToken);
 
       return user;
     });
 
-    // Generate email verification token
-    await this.generateEmailVerificationToken(result.email, result.id);
+    // Generate tokens
+    const tokens = await this.generateTokens(result, deviceInfo);
 
-    // Send verification email
-    // await this.emailService.sendEmailVerification(
-    //   result.email,
-    //   result.firstName,
-    //   verificationToken,
-    // );
-
-    // Generate auth tokens
-    const { accessToken, refreshToken } = await this.generateTokens(result);
-
-    return {
-      accessToken,
-      refreshToken,
-      user: {
-        id: result.id,
-        email: result.email,
-        firstName: result.firstName ?? '',
-        lastName: result.lastName ?? '',
-        emailVerified: result.emailVerified,
-      },
-    };
+    return this.formatLoginResponse(result, tokens);
   }
 
-  async login(dto: Login, deviceInfo?: any): Promise<AuthResponse> {
-    // Find user
+async login(dto: Login, req?: any): Promise<AuthResponse> {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
       include: { profile: true },
     });
 
-    if (!user || user.accountStatus !== 'ACTIVE') {
+    if (!user || user.provider !== AuthProvider.LOCAL) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Verify password
+    if (!user.password) {
+      throw new UnauthorizedException('Please use Google Sign-In for this account');
+    }
+
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Update last login
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { lastLogin: new Date() },
-    });
+    if (!user.isActive) {
+      throw new UnauthorizedException('Account is suspended');
+    }
 
-    // Generate tokens
-    const { accessToken, refreshToken } = await this.generateTokens(
-      user,
-      deviceInfo,
-    );
+    const deviceInfo = this.extractDeviceInfo(req);
+    const tokens = await this.generateTokens(user, deviceInfo);
 
-    return {
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        emailVerified: user.emailVerified,
-      },
-    };
+    return this.formatLoginResponse(user, tokens);
   }
 
-  async refreshToken(
-    refreshTokenString: string,
-  ): Promise<{ accessToken: string }> {
-    const refreshToken = await this.prisma.refreshToken.findUnique({
-      where: { token: refreshTokenString },
+  // ===== GOOGLE OAUTH =====
+  async googleAuth(profile: GoogleProfile, req?: any): Promise<AuthResponse> {
+    let user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { googleId: profile.id },
+          { email: profile.email, provider: AuthProvider.GOOGLE },
+        ],
+      },
+      include: { profile: true },
+    });
+
+    const deviceInfo = this.extractDeviceInfo(req);
+
+    if (!user) {
+      // Create new user
+      user = await this.prisma.$transaction(async (tx) => {
+        const newUser = await tx.user.create({
+          data: {
+            email: profile.email,
+            googleId: profile.id,
+            firstName: profile.firstName,
+            lastName: profile.lastName,
+            avatar: profile.picture,
+            provider: AuthProvider.GOOGLE,
+            emailVerified: true, // Google emails are pre-verified
+            profile: {
+              create: {
+                avatar: profile.picture,
+                subscriptionTier: SubscriptionTier.FREE,
+              },
+            },
+          },
+          include: { profile: true },
+        });
+
+        return newUser;
+      });
+    } else {
+      // Update existing user info
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          googleId: profile.id,
+          firstName: profile.firstName,
+          lastName: profile.lastName,
+          avatar: profile.picture,
+          emailVerified: true,
+        },
+        include: { profile: true },
+      });
+    }
+
+    if (!user.isActive) {
+      throw new UnauthorizedException('Account is suspended');
+    }
+
+    const tokens = await this.generateTokens(user, deviceInfo);
+    return this.formatLoginResponse(user, tokens);
+  }
+
+    // ===== TOKEN MANAGEMENT =====
+  async refreshToken(oldRefreshToken: string, req?: any): Promise<{ accessToken: string; refreshToken: string }> {
+    const tokenRecord = await this.prisma.refreshToken.findUnique({
+      where: { token: oldRefreshToken },
       include: { user: true },
     });
 
-    if (
-      !refreshToken ||
-      refreshToken.isRevoked ||
-      refreshToken.expiresAt < new Date()
-    ) {
-      throw new UnauthorizedException('Invalid refresh token');
+    if (!tokenRecord || tokenRecord.isRevoked || tokenRecord.expiresAt < new Date()) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    if (refreshToken.user.accountStatus !== 'ACTIVE') {
-      throw new UnauthorizedException('Account is not active');
-    }
+    // Revoke old token
+    await this.prisma.refreshToken.update({
+      where: { id: tokenRecord.id },
+      data: { isRevoked: true },
+    });
 
-    // Generate new access token
-    const payload = {
-      sub: refreshToken.user.id,
-      email: refreshToken.user.email,
-    };
+    const deviceInfo = this.extractDeviceInfo(req);
+    const tokens = await this.generateTokens(tokenRecord.user, deviceInfo);
 
-    const accessToken = await this.tokenService.generateAccessToken(payload);
-
-    return { accessToken };
+    return tokens;
   }
+
 
   async forgotPassword(dto: ForgotPassword): Promise<{ message: string }> {
     const user = await this.prisma.user.findUnique({
@@ -164,18 +200,9 @@ export class AuthService {
     });
 
     // Always return success to prevent email enumeration
-    if (!user) {
+    if (!user || user.provider !== AuthProvider.LOCAL) {
       return { message: 'If the email exists, a reset link has been sent' };
     }
-
-    // Invalidate existing reset tokens
-    await this.prisma.passwordResetToken.updateMany({
-      where: {
-        userId: user.id,
-        used: false,
-      },
-      data: { used: true },
-    });
 
     // Generate reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
@@ -299,14 +326,12 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private async generateEmailVerificationToken(
-    email: string,
-    userId: string,
-  ): Promise<string> {
+  private async generateEmailVerificationToken(email: string, userId?: string, tx?: any): Promise<string> {
+    const prisma = tx || this.prisma;
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24); // 24 hours
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    await this.prisma.emailVerificationToken.create({
+    await prisma.emailVerificationToken.create({
       data: {
         token,
         email,
@@ -316,5 +341,39 @@ export class AuthService {
     });
 
     return token;
+  }
+
+  private parseUserAgent(userAgent?: string): string {
+    if (!userAgent) return 'Unknown Device';
+    
+    // Simple device detection - a library like 'ua-parser-js'
+    if (userAgent.includes('Mobile')) return 'Mobile Device';
+    if (userAgent.includes('Tablet')) return 'Tablet';
+    return 'Desktop';
+  }
+
+  private extractDeviceInfo(req?: any) {
+    if (!req) return null;
+
+    return {
+      ip: req.ip || req.connection?.remoteAddress,
+      userAgent: req.get('user-agent'),
+      device: this.parseUserAgent(req.get('user-agent')),
+    };
+  }
+
+   private formatLoginResponse(user: any, tokens: any): AuthResponse {
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        avatar: user.avatar,
+        provider: user.provider,
+        emailVerified: user.emailVerified,
+      },
+      tokens,
+    };
   }
 }

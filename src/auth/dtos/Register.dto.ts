@@ -5,6 +5,7 @@ import {
   MinLength,
   MaxLength,
   IsNotEmpty,
+  IsOptional,
 } from 'class-validator';
 
 export class Register {
@@ -35,4 +36,13 @@ export class Register {
   @IsNotEmpty()
   @MaxLength(50)
   lastName: string;
+
+  @ApiProperty({
+    example: 'https://example.com/avatar.jpg',
+    description: 'Optional avatar URL',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  avatar?: string;
 }

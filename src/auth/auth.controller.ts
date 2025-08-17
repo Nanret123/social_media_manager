@@ -8,8 +8,9 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  Res,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -23,6 +24,7 @@ import { VerifyEmail } from './dtos/VerifyEmail.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { LocalAuthGuard } from './guards/local-auth.guard';
 import { RefreshToken } from './dtos/RefreshToken.dto';
+import { GoogleOauthGuard } from './guards/google-auth.guard';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -95,6 +97,26 @@ export class AuthController {
   @ApiOperation({ summary: 'Get current authenticated user profile' })
   getProfile(@CurrentUser() user: any) {
     return { user };
+  }
+
+   @Get('google')
+  @UseGuards(GoogleOauthGuard)
+  @ApiOperation({ summary: 'Initiate Google OAuth login' })
+  async googleAuth() {
+    // Guard redirects to Google
+  }
+
+  @Get('google/callback')
+  @UseGuards(GoogleOauthGuard)
+  @ApiOperation({ summary: 'Google OAuth callback' })
+  async googleAuthRedirect(@CurrentUser() user: any, @Req() req: Request, @Res() res: Response) {
+    const result = await this.authService.googleAuth(user, req);
+
+    // In production, redirect to frontend with tokens in query params or cookies
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const redirectUrl = `${frontendUrl}/auth/callback?token=${result.tokens.accessToken}&refresh=${result.tokens.refreshToken}`;
+
+    res.redirect(redirectUrl);
   }
 
   // Google OAuth endpoints:

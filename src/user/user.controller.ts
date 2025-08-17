@@ -46,19 +46,6 @@ export class UserController {
     return this.userService.changePassword(user.id, dto);
   }
 
-  @Post('change-email/request')
-  @ApiOperation({ summary: 'Request email change' })
-  async requestEmailChange(@CurrentUser() user: any, @Body() dto: UpdateEmail) {
-    return this.userService.requestEmailChange(user.id, dto);
-  }
-
-  @Public()
-  @Post('change-email/confirm')
-  @ApiOperation({ summary: 'Confirm email change with token' })
-  async confirmEmailChange(@Query('token') token: string) {
-    return this.userService.confirmEmailChange(token);
-  }
-
   @Post('deactivate')
   @ApiOperation({ summary: 'Deactivate account' })
   async deactivateAccount(

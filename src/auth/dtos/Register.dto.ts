@@ -1,48 +1,52 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { UserRole } from '@prisma/client';
 import {
   IsEmail,
   IsString,
   MinLength,
-  MaxLength,
-  IsNotEmpty,
   IsOptional,
+  IsEnum,
 } from 'class-validator';
 
 export class Register {
   @ApiProperty({
+    description: 'Email address of the user',
     example: 'user@example.com',
-    description: 'User email address',
   })
   @IsEmail()
   email: string;
 
   @ApiProperty({
+    description: 'Password for the account (minimum 8 characters)',
     example: 'StrongPass123!',
-    description: 'Password (min 8 chars)',
+    minLength: 8,
   })
   @IsString()
   @MinLength(8)
-  @MaxLength(100)
   password: string;
 
-  @ApiProperty({ example: 'John', description: 'First name' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(50)
-  firstName: string;
-
-  @ApiProperty({ example: 'Doe', description: 'Last name' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(50)
-  lastName: string;
-
-  @ApiProperty({
-    example: 'https://example.com/avatar.jpg',
-    description: 'Optional avatar URL',
-    required: false,
+  @ApiPropertyOptional({
+    description: 'First name of the user',
+    example: 'John',
   })
   @IsOptional()
   @IsString()
-  avatar?: string;
+  firstName?: string;
+
+  @ApiPropertyOptional({
+    description: 'Last name of the user',
+    example: 'Doe',
+  })
+  @IsOptional()
+  @IsString()
+  lastName?: string;
+
+  @ApiPropertyOptional({
+    description: 'Role of the user',
+    enum: UserRole,
+    example: UserRole.USER,
+  })
+  @IsOptional()
+  @IsEnum(UserRole)
+  role?: UserRole;
 }

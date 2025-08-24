@@ -3,22 +3,13 @@ import { AppModule } from './app.module';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { SwaggerModule } from '@nestjs/swagger';
 import { swaggerConfig } from './config/swagger.config';
-// import helmet from 'helmet';
-// import * as compression from 'compression';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
+import { LoggerMiddleware } from './common/middlewares/logger.middleware';
+
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-
-  //  app.use(helmet());
-  // app.use(compression());
-
-  // CORS
-  // app.enableCors({
-  //   origin:
-  //     process.env.NODE_ENV === 'production' ? ['https://yourdomain.com'] : true,
-  //   credentials: true,
-  // });
-
 
   app.enableCors();
   app.setGlobalPrefix('api/v1');
@@ -36,15 +27,23 @@ async function bootstrap() {
   });
 
   // Global validation
-  app.useGlobalPipes(
+   app.useGlobalPipes(
     new ValidationPipe({
-      transform: true,
       whitelist: true,
       forbidNonWhitelisted: true,
-      //disableErrorMessages: process.env.NODE_ENV === 'production',
+      transform: true,
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
     }),
   );
 
+  app.useGlobalFilters(
+    new HttpExceptionFilter(),
+    new PrismaExceptionFilter(),
+  );
+
+ app.use(new LoggerMiddleware().use);
   await app.listen(process.env.PORT ?? 3000);
 }
 bootstrap();

@@ -4,9 +4,13 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { ConfigModule } from '@nestjs/config';
-import { UserModule } from './user/user.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
+import { MailModule } from './mail/mail.module';
+import { PlatformsModule } from './platforms/platforms.module';
+import { RedisModule } from './redis/redis.module';
+import { PostsModule } from './posts/posts.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
 
 
 @Module({
@@ -16,7 +20,6 @@ import { ScheduleModule } from '@nestjs/schedule';
     }),
     PrismaModule,
     AuthModule,
-    UserModule,
      ThrottlerModule.forRoot([
       {
         ttl: 60 * 1000, // 1 minute
@@ -26,6 +29,16 @@ import { ScheduleModule } from '@nestjs/schedule';
 
     // Task scheduling
     ScheduleModule.forRoot(),
+
+    MailModule,
+
+    PlatformsModule,
+
+    RedisModule,
+
+    PostsModule,
+
+    SchedulerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

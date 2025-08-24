@@ -17,5 +17,5 @@ export class ResetPassword {
   @IsString()
   @MinLength(8)
   @MaxLength(100)
-  newPassword: string;
+  password: string;
 }

@@ -1,9 +1,9 @@
-import { AuthProvider } from "@prisma/client";
+import { UserRole } from '@prisma/client';
 
 export interface JwtPayload {
   sub: string;
   email: string;
-  provider: AuthProvider;
+  role: UserRole;
   iat?: number;
   exp?: number;
 }

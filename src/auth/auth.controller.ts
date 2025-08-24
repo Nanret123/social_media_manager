@@ -1,126 +1,151 @@
 import {
-  Controller,
-  Post,
   Body,
-  UseGuards,
-  Req,
+  Controller,
   Get,
-  Query,
   HttpCode,
   HttpStatus,
-  Res,
+  Post,
+  Query,
+  Request,
+  Response,
+  UseGuards,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
+import { LocalAuthGuard } from './guards/local-auth.guard';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
-import { Public } from './decorators/public.decorator';
+import { User } from '@prisma/client';
 import { AuthResponse } from './dtos/AuthResponse.dto';
 import { ForgotPassword } from './dtos/ForgotPassword.dto';
 import { Login } from './dtos/Login.dto';
 import { Register } from './dtos/Register.dto';
 import { ResetPassword } from './dtos/ResetPassword.dto';
-import { VerifyEmail } from './dtos/VerifyEmail.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { LocalAuthGuard } from './guards/local-auth.guard';
-import { RefreshToken } from './dtos/RefreshToken.dto';
-import { GoogleOauthGuard } from './guards/google-auth.guard';
+import { GoogleAuthGuard } from './guards/google-auth.guard';
 
-@ApiTags('Auth')
+@ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private configService: ConfigService,
+  ) {}
 
-  @Public()
   @Post('register')
+  @Throttle({ default: { limit: 5, ttl: 60 } })
   @ApiOperation({ summary: 'Register a new user' })
-  async register(@Body() dto: Register): Promise<AuthResponse> {
-    return this.authService.register(dto);
+  @ApiResponse({ status: 201, description: 'User registered successfully', type: AuthResponse })
+  async register(@Body() registerDto: Register) {
+    return this.authService.register(registerDto);
   }
 
-  @Public()
-  @UseGuards(LocalAuthGuard)
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(LocalAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 60 } })
   @ApiOperation({ summary: 'Login with email and password' })
-  async login(@Body() dto: Login, @Req() req: Request): Promise<AuthResponse> {
-    const deviceInfo = {
-      userAgent: req.get('user-agent'),
-      ip: req.ip,
-    };
-    return this.authService.login(dto, deviceInfo);
+  @ApiResponse({ status: 200, description: 'Login successful', type: AuthResponse })
+  async login(@Body() loginDto: Login, @Request() req) {
+    return this.authService.login(loginDto);
   }
 
-  @Public()
-  @Post('refresh')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Refresh access token' })
-  async refreshToken(@Body() dto: RefreshToken) {
-    return this.authService.refreshToken(dto.refreshToken);
-  }
-
-  @Public()
-  @Post('forgot-password')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Send password reset email' })
-  async forgotPassword(@Body() dto: ForgotPassword) {
-    return this.authService.forgotPassword(dto);
-  }
-
-  @Public()
-  @Post('reset-password')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Reset user password' })
-  async resetPassword(@Body() dto: ResetPassword) {
-    return this.authService.resetPassword(dto);
-  }
-
-  @Public()
-  @Get('verify-email')
-  @ApiOperation({ summary: 'Verify user email' })
-  async verifyEmail(@Query() dto: VerifyEmail) {
-    return this.authService.verifyEmail(dto.token);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post('logout')
-  @HttpCode(HttpStatus.OK)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Logout user and revoke refresh token' })
-  async logout(@Body() dto: RefreshToken, @CurrentUser() user: any) {
-    return this.authService.logout(user.id, dto.refreshToken);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get('me')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get current authenticated user profile' })
-  getProfile(@CurrentUser() user: any) {
-    return { user };
-  }
-
-   @Get('google')
-  @UseGuards(GoogleOauthGuard)
+  @Get('google')
+  @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Initiate Google OAuth login' })
   async googleAuth() {
-    // Guard redirects to Google
+    // Redirect to Google login
   }
 
   @Get('google/callback')
-  @UseGuards(GoogleOauthGuard)
+  @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Google OAuth callback' })
-  async googleAuthRedirect(@CurrentUser() user: any, @Req() req: Request, @Res() res: Response) {
-    const result = await this.authService.googleAuth(user, req);
+  @ApiResponse({ status: 302, description: 'Redirect to frontend with tokens' })
+  async googleCallback(@Request() req, @Response() res) {
+    const authResponse = await this.authService.googleLogin(req.user);
 
-    // In production, redirect to frontend with tokens in query params or cookies
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const redirectUrl = `${frontendUrl}/auth/callback?token=${result.tokens.accessToken}&refresh=${result.tokens.refreshToken}`;
+    const frontendUrl = this.configService.get('FRONTEND_URL');
+    const redirectUrl = `${frontendUrl}/auth/success?token=${authResponse.tokens.accessToken}&refresh=${authResponse.tokens.refreshToken}`;
 
     res.redirect(redirectUrl);
   }
 
-  // Google OAuth endpoints:
-// GET  /api/v1/auth/google (initiates OAuth flow)
-// GET  /api/v1/auth/google/callback (OAuth callback)
-// POST /api/v1/auth/set-password (for OAuth users to set password)
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Refresh access token using refresh token' })
+  @ApiResponse({ status: 200, description: 'New tokens issued', type: AuthResponse })
+  async refreshTokens(@Body() body: { refreshToken: string }) {
+    return this.authService.refreshTokens(body.refreshToken);
+  }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout and invalidate refresh token' })
+  @ApiResponse({ status: 200, description: 'Logged out successfully' })
+  async logout(@Body() body: { refreshToken: string }) {
+    await this.authService.logout(body.refreshToken);
+    return { message: 'Logged out successfully' };
+  }
+
+  @Get('verify-email')
+  @ApiOperation({ summary: 'Verify email using token' })
+  @ApiResponse({ status: 200, description: 'Email verified successfully' })
+  async verifyEmail(@Query('token') token: string) {
+    await this.authService.verifyEmail(token);
+    return { message: 'Email verified successfully' };
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 3, ttl: 60 } })
+  @ApiOperation({ summary: 'Send password reset email' })
+  @ApiResponse({
+    status: 200,
+    description: 'If the email exists, a reset link has been sent',
+  })
+  async forgotPassword(@Body() forgotPasswordDto: ForgotPassword) {
+    await this.authService.forgotPassword(forgotPasswordDto);
+    return { message: 'If the email exists, a reset link has been sent' };
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reset password using token' })
+  @ApiResponse({ status: 200, description: 'Password reset successfully' })
+  async resetPassword(@Body() resetPasswordDto: ResetPassword) {
+    await this.authService.resetPassword(resetPasswordDto);
+    return { message: 'Password reset successfully' };
+  }
+
+  @Get('profile')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get current user profile' })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns user profile',
+    schema: {
+      example: {
+        id: 'a3f6c2e7-5b0a-42d9-9c9c-7c6a8b9f1234',
+        email: 'user@example.com',
+        firstName: 'John',
+        lastName: 'Doe',
+        role: 'USER',
+        isEmailVerified: true,
+      },
+    },
+  })
+  async getProfile(@CurrentUser() user: User) {
+    return {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+      isEmailVerified: user.isEmailVerified,
+    };
+  }
 }

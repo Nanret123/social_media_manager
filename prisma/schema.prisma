@@ -26,6 +26,7 @@ model User {
   updatedAt              DateTime       @updatedAt
 
   socialAccounts SocialAccount[]
+   mediaFiles     MediaFile[] 
   posts          Post[]
   //organizations  OrganizationMember[]
 }
@@ -80,6 +81,8 @@ model Post {
 
   user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+   media         PostMedia[]
 }
 
 model ScheduleJob {
@@ -90,6 +93,40 @@ model ScheduleJob {
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
 }
+
+model MediaFile {
+  id          String    @id @default(cuid())
+  userId      String
+  filename    String
+  originalName String
+  mimeType    String
+  size        Int
+  url         String    // S3 or Cloudinary URL
+  thumbnailUrl String?  // For videos
+  duration    Int?      // For videos in seconds
+  processed   Boolean   @default(false)
+  metadata    Json?     // Platform-specific processing info
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postMedias PostMedia[]
+}
+
+model PostMedia {
+  id        String @id @default(cuid())
+  postId    String
+  mediaId   String
+  order     Int    @default(0)
+  createdAt DateTime @default(now())
+
+  post  Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  media MediaFile @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, mediaId])
+  @@map("post_media")
+}
+
 
 enum Platform {
   TWITTER

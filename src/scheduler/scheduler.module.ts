@@ -5,6 +5,7 @@ import { BullModule } from '@nestjs/bull';
 import { PlatformsModule } from 'src/platforms/platforms.module';
 import { PrismaModule } from 'src/prisma/prisma.module';
 import { PostProcessor } from './post.processor';
+import { BullBoardModule } from './bull-board.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { PostProcessor } from './post.processor';
     }),
     PrismaModule,
     PlatformsModule,
+    BullBoardModule,
   ],
   providers: [SchedulerService, PostProcessor],
   exports: [SchedulerService],

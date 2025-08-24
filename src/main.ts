@@ -6,6 +6,7 @@ import { swaggerConfig } from './config/swagger.config';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { LoggerMiddleware } from './common/middlewares/logger.middleware';
+import { BullBoardModule } from './scheduler/bull-board.module';
 
 
 async function bootstrap() {
@@ -44,6 +45,8 @@ async function bootstrap() {
   );
 
  app.use(new LoggerMiddleware().use);
+  const bullBoard = app.get(BullBoardModule);
+  bullBoard.setup(app);
   await app.listen(process.env.PORT ?? 3000);
 }
 bootstrap();

@@ -7,7 +7,7 @@ import {
 import { Platform } from '@prisma/client';
 import Redis from 'ioredis';
 import { EncryptionService } from 'src/common/utility/encryption.service';
-import { FileUploadService } from 'src/file-upload/file-upload.service';
+import { FileUploadService } from 'src/media/media.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import TwitterApi from 'twitter-api-v2';
 

@@ -3,7 +3,7 @@ import { PostStatus, Platform } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { LinkedInService } from './linkedin/linkedin.service';
 import { TwitterService } from './twitter/twitter.service';
-import { FileUploadService } from 'src/file-upload/file-upload.service';
+import { FileUploadService } from 'src/media/media.service';
 
 @Injectable()
 export class PlatformsService {

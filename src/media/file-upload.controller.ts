@@ -9,7 +9,7 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileUploadService } from './file-upload.service';
+import { MediaService } from './media.service';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import {
   ApiOperation,
@@ -23,7 +23,7 @@ import { Public } from 'src/auth/decorators/public.decorator';
 @ApiTags('File Upload')
 @Controller('file-upload')
 export class FileUploadController {
-  constructor(private readonly service: FileUploadService) {}
+  constructor(private readonly service: MediaService) {}
 
   //upload one file
   @Public()

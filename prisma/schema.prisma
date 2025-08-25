@@ -102,6 +102,7 @@ model MediaFile {
   mimeType    String
   size        Int
   url         String    // S3 or Cloudinary URL
+  publicId String
   thumbnailUrl String?  // For videos
   duration    Int?      // For videos in seconds
   processed   Boolean   @default(false)

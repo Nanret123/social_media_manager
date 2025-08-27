@@ -17,7 +17,7 @@ export class OrganizationGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    // 1. Get the required roles from the custom decorator (see next step)
+    // Get the required roles from the custom decorator
     const requiredRoles = this.reflector.get<OrganizationRole[]>(
       'organizationRoles',
       context.getHandler(),
@@ -25,19 +25,19 @@ export class OrganizationGuard implements CanActivate {
 
     // 2. Get the request object
     const request = context.switchToHttp().getRequest();
-    const userId = request.user?.id; // Assuming user is attached from an AuthGuard
-    const organizationId = request.params.orgId; // e.g., from a route like '/orgs/:orgId/...'
+    const userId = request.user?.id; 
+    const organizationId = request.params.orgId; 
 
     if (!organizationId) {
       throw new ForbiddenException('Organization ID not found in request');
     }
 
-    // 3. Check the user's membership and role
+    // Check the user's membership and role
     const membership = await this.prisma.organizationMember.findFirst({
       where: {
         userId,
         organizationId,
-        organization: { isActive: true }, // Check for active org
+        organization: { isActive: true },
       },
     });
 
@@ -45,15 +45,14 @@ export class OrganizationGuard implements CanActivate {
       throw new ForbiddenException('You are not a member of this organization');
     }
 
-    // 4. If specific roles are required, check them
+    // If specific roles are required, check them
     if (requiredRoles.length > 0 && !requiredRoles.includes(membership.role)) {
       throw new ForbiddenException(
         `Insufficient permissions. Required roles: ${requiredRoles.join(', ')}`,
       );
     }
 
-    // 5. Attach the membership to the request for use in the controller/service
-    // This is powerful! Now we don't have to query the DB again.
+    // Attach the membership to the request for use in the controller/service
     request.organizationMembership = membership;
 
     return true;

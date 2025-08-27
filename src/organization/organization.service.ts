@@ -1,10 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { OrganizationRole } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { CreateOrganization } from './dtos/create-organization.dto';
+import { UpdateOrganization } from './dtos/update-organization.dto';
+import { UpdateMemberRole } from './dtos/organization-member.dto';
 
 @Injectable()
 export class OrganizationService {
   constructor(private prisma: PrismaService) {}
 
-  async createOrganization(userId: string, createDto: CreateOrganizationDto) {
+  async createOrganization(userId: string, createDto: CreateOrganization) {
     const { name, slug } = createDto;
     
     // Generate slug from name if not provided
@@ -33,13 +38,10 @@ export class OrganizationService {
         }
       },
       include: {
-        owner: {
-          select: { id: true, name: true, email: true }
-        },
         members: {
           include: {
             user: {
-              select: { id: true, name: true, email: true }
+              select: { id: true, firstName: true, lastName: true, email: true, role: true }
             }
           }
         },
@@ -58,12 +60,20 @@ export class OrganizationService {
 
   async getOrganizationsByUser(userId: string) {
     const memberships = await this.prisma.organizationMember.findMany({
-      where: { userId },
+      where: { 
+        userId,
+        organization: { isActive: true }
+      },
       include: {
         organization: {
           include: {
-            owner: {
-              select: { id: true, name: true, email: true }
+            members: {
+              where: { role: OrganizationRole.OWNER },
+              include: {
+                user: {
+                  select: { id: true, firstName: true, lastName: true, email: true }
+                }
+              }
             },
             _count: {
               select: {
@@ -78,29 +88,29 @@ export class OrganizationService {
       orderBy: { joinedAt: 'desc' }
     });
 
+    // Transform the data to include an 'owner' field for convenience
     return memberships.map(membership => ({
       ...membership.organization,
+      owner: this.getOwnerFromMembers(membership.organization.members),
       userRole: membership.role
     }));
   }
 
-  async getOrganizationById(orgId: string, userId: string) {
-    // First check if user has access to this organization
-    await this.checkUserAccess(orgId, userId);
+   async getOrganizationById(orgId: string, userId: string) {
 
-    const organization = await this.prisma.organization.findUnique({
-      where: { id: orgId },
+    const organization = await this.prisma.organization.findFirst({
+      where: { 
+        id: orgId,
+        isActive: true 
+      },
       include: {
-        owner: {
-          select: { id: true, name: true, email: true }
-        },
         members: {
           include: {
             user: {
-              select: { id: true, name: true, email: true }
+              select: { id: true, firstName: true, lastName: true, email: true }
             },
             inviter: {
-              select: { id: true, name: true, email: true }
+              select: { id: true, firstName: true, lastName: true, email: true }
             }
           },
           orderBy: { joinedAt: 'asc' }
@@ -109,7 +119,6 @@ export class OrganizationService {
           select: {
             id: true,
             platform: true,
-            platformAccountId: true,
             username: true,
             isActive: true
           }
@@ -129,19 +138,18 @@ export class OrganizationService {
       throw new NotFoundException('Organization not found');
     }
 
-    // Get user's role in this organization
     const userMembership = organization.members.find(m => m.userId === userId);
+    const owner = this.getOwnerFromMembers(organization.members);
     
     return {
       ...organization,
+      owner,
       userRole: userMembership?.role
     };
   }
 
-  async updateOrganization(orgId: string, userId: string, updateDto: UpdateOrganizationDto) {
-    // Check if user has admin access
-    await this.checkUserAccess(orgId, userId, [OrganizationRole.OWNER, OrganizationRole.ADMIN]);
 
+  async updateOrganization(orgId: string, updateDto: UpdateOrganization) {
     const { name, slug } = updateDto;
 
     // If slug is being updated, check if it's available
@@ -162,8 +170,13 @@ export class OrganizationService {
       where: { id: orgId },
       data: updateDto,
       include: {
-        owner: {
-          select: { id: true, name: true, email: true }
+        members: {
+          where: { role: OrganizationRole.OWNER },
+          include: {
+            user: {
+              select: { id: true, firstName: true, lastName: true, email: true }
+            }
+          }
         },
         _count: {
           select: {
@@ -175,12 +188,13 @@ export class OrganizationService {
       }
     });
 
-    return organization;
+    return {
+      ...organization,
+      owner: this.getOwnerFromMembers(organization.members)
+    };
   }
 
-  async deleteOrganization(orgId: string, userId: string) {
-    // Only owner can delete organization
-    await this.checkUserAccess(orgId, userId, [OrganizationRole.OWNER]);
+  async deleteOrganization(orgId: string) {
 
     const organization = await this.prisma.organization.update({
       where: { id: orgId },
@@ -197,9 +211,7 @@ export class OrganizationService {
     return { message: 'Organization deleted successfully' };
   }
 
-  async updateMemberRole(orgId: string, memberId: string, userId: string, updateDto: UpdateMemberRoleDto) {
-    // Check if user has admin access
-    await this.checkUserAccess(orgId, userId, [OrganizationRole.OWNER, OrganizationRole.ADMIN]);
+  async updateMemberRole(orgId: string, memberId: string, updateDto: UpdateMemberRole) {
 
     const member = await this.prisma.organizationMember.findUnique({
       where: { id: memberId },
@@ -215,17 +227,12 @@ export class OrganizationService {
       throw new BadRequestException('Cannot change owner role');
     }
 
-    // Only owner can promote to admin
-    if (updateDto.role === OrganizationRole.ADMIN) {
-      await this.checkUserAccess(orgId, userId, [OrganizationRole.OWNER]);
-    }
-
     const updatedMember = await this.prisma.organizationMember.update({
       where: { id: memberId },
       data: { role: updateDto.role },
       include: {
         user: {
-          select: { id: true, name: true, email: true }
+          select: { id: true, firstName: true, lastName: true ,email: true }
         }
       }
     });
@@ -233,10 +240,7 @@ export class OrganizationService {
     return updatedMember;
   }
 
-  async removeMember(orgId: string, memberId: string, userId: string) {
-    // Check if user has admin access
-    await this.checkUserAccess(orgId, userId, [OrganizationRole.OWNER, OrganizationRole.ADMIN]);
-
+  async removeMember(orgId: string, memberId: string) {
     const member = await this.prisma.organizationMember.findUnique({
       where: { id: memberId }
     });
@@ -293,31 +297,6 @@ export class OrganizationService {
       .trim();
   }
 
-  private async checkUserAccess(
-    orgId: string, 
-    userId: string, 
-    requiredRoles?: OrganizationRole[]
-  ) {
-    const membership = await this.prisma.organizationMember.findUnique({
-      where: {
-        organizationId_userId: {
-          organizationId: orgId,
-          userId
-        }
-      }
-    });
-
-    if (!membership) {
-      throw new ForbiddenException('Access denied: Not a member of this organization');
-    }
-
-    if (requiredRoles && !requiredRoles.includes(membership.role)) {
-      throw new ForbiddenException('Access denied: Insufficient permissions');
-    }
-
-    return membership;
-  }
-
   async getUserRoleInOrganization(userId: string, organizationId: string): Promise<OrganizationRole | null> {
     const membership = await this.prisma.organizationMember.findUnique({
       where: {
@@ -330,4 +309,9 @@ export class OrganizationService {
 
     return membership?.role || null;
   }
+
+  private getOwnerFromMembers(members: any[]) {
+    return members.find(m => m.role === OrganizationRole.OWNER)?.user || null;
+  }
+
 }

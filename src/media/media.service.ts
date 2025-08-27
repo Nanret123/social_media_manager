@@ -3,7 +3,9 @@ import { v2 as cloudinary } from 'cloudinary';
 import { UploadApiResponse, UploadApiErrorResponse } from 'cloudinary';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { unlink } from 'fs/promises';
-
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
+import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE } from './media.constants';
 
 export interface UploadResult {
   url: string;
@@ -14,12 +16,57 @@ export interface UploadResult {
   duration?: number;
 }
 
-
 @Injectable()
 export class MediaService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @InjectQueue('media-processing') private mediaQueue: Queue,
+  ) {}
 
- private async uploadToCloudinary(
+   async uploadFile(
+    userId: string,
+    organizationId: string,
+    file: Express.Multer.File,
+  ) {
+    // 1. SECURITY: Validate File Type & Size (Same as before)
+    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException(`File type ${file.mimetype} is not allowed.`);
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      throw new BadRequestException(`File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
+    }
+
+    // 2. Create a DB record, marking it as unprocessed
+    const mediaRecord = await this.prisma.mediaFile.create({
+      data: {
+        userId,
+        organizationId,
+        filename: file.filename,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+        processed: false, // This is key - it's not ready yet
+      },
+    });
+
+    // 3. Add a job to the BullMQ queue for processing
+    await this.mediaQueue.add(
+      'process-upload', // Job name
+      {
+        mediaRecordId: mediaRecord.id,
+        filePath: file.path, // Path to the temporary file
+      },
+      { 
+        attempts: 3, // Retry 3 times on failure
+        backoff: { type: 'exponential', delay: 2000 } // Wait 2s, 4s, 8s between retries
+      }
+    );
+
+    // 4. Return the record immediately, even though it's not processed
+    return mediaRecord;
+  }
+
+  private async uploadToCloudinary(
     filePath: string,
     filename: string,
     mimeType: string,
@@ -63,53 +110,5 @@ export class MediaService {
       await unlink(filePath).catch(() => {});
       throw new BadRequestException('Cloudinary upload failed');
     }
-  }
-
-  async uploadFile(
-    userId: string,
-    file: Express.Multer.File,
-  ) {
-    const { path, originalname, mimetype, size, filename } = file;
-    const uploaded = await this.uploadToCloudinary(path, filename, mimetype);
-
-    return this.prisma.mediaFile.create({
-      data: {
-        userId,
-        filename,
-        originalName: originalname,
-        mimeType: mimetype,
-        size,
-        url: uploaded.url,
-        publicId: uploaded.publicId,
-        thumbnailUrl: uploaded.thumbnailUrl,
-        duration: uploaded.duration,
-        processed: true,
-      },
-    });
-  }
-
-  async uploadMultipleFiles(
-    userId: string,
-    files: Express.Multer.File[],
-  ) {
-    const uploadedFiles = [];
-    for (const file of files) {
-      const media = await this.uploadFile(userId, file);
-      uploadedFiles.push(media);
-    }
-    return uploadedFiles;
-  }
-
-  async deleteFile(mediaId: string) {
-    const media = await this.prisma.mediaFile.findUnique({ where: { id: mediaId } });
-    if (!media) throw new BadRequestException('Media not found');
-
-    // Delete from Cloudinary
-    await cloudinary.uploader.destroy(media.publicId, {
-      resource_type: media.mimeType.startsWith('video/') ? 'video' : 'image',
-    });
-
-    // Delete from DB
-    return this.prisma.mediaFile.delete({ where: { id: mediaId } });
   }
 }

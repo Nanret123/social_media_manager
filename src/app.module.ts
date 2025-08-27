@@ -10,7 +10,8 @@ import { MailModule } from './mail/mail.module';
 import { PlatformsModule } from './platforms/platforms.module';
 import { RedisModule } from './redis/redis.module';
 import { PostsModule } from './posts/posts.module';
-import { SchedulerModule } from './scheduler/scheduler.module';
+import { SchedulerModule } from './posts/post-queue.module';
+import { OrganizationModule } from './organization/organization.module';
 
 
 @Module({
@@ -39,6 +40,8 @@ import { SchedulerModule } from './scheduler/scheduler.module';
     PostsModule,
 
     SchedulerModule,
+
+    OrganizationModule,
   ],
   controllers: [AppController],
   providers: [AppService],

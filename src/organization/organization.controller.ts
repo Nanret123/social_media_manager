@@ -1,6 +1,5 @@
 import { Controller, Request, Body, Param, Post, Get, Put, Delete, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { OrganizationGuard } from '../common/guards/organization.guard';
 import { OrganizationRoles } from '../common/decorators/organization-roles.decorator';
 import { OrganizationService } from './organization.service';
@@ -16,21 +15,19 @@ export class OrganizationController {
   constructor(private organizationService: OrganizationService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Create a new organization' })
   async createOrganization(@Request() req, @Body() createDto: CreateOrganization) {
     return this.organizationService.createOrganization(req.user.id, createDto);
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get all organizations where the user is a member' })
   async getMyOrganizations(@Request() req) {
     return this.organizationService.getOrganizationsByUser(req.user.id);
   }
 
   @Get(':orgId')
-  @UseGuards(JwtAuthGuard, OrganizationGuard)
+  @UseGuards(OrganizationGuard)
   @ApiOperation({ summary: 'Get details of a specific organization' })
   async getOrganization(@Param('orgId') orgId: string, @Request() req) {
     // Guard ensures access. No need to pass userId.
@@ -38,7 +35,7 @@ export class OrganizationController {
   }
 
   @Put(':orgId')
-  @UseGuards(JwtAuthGuard, OrganizationGuard)
+  @UseGuards(OrganizationGuard)
   @OrganizationRoles(OrganizationRole.OWNER, OrganizationRole.ADMIN)
   @ApiOperation({ summary: 'Update organization details' })
   async updateOrganization(
@@ -49,7 +46,7 @@ export class OrganizationController {
   }
 
   @Delete(':orgId')
-  @UseGuards(JwtAuthGuard, OrganizationGuard)
+  @UseGuards(OrganizationGuard)
   @OrganizationRoles(OrganizationRole.OWNER) 
   @ApiOperation({ summary: 'Delete an organization' })
   async deleteOrganization(@Param('orgId') orgId: string) {
@@ -57,7 +54,7 @@ export class OrganizationController {
   }
 
   @Put(':orgId/members/:memberId/role')
-  @UseGuards(JwtAuthGuard, OrganizationGuard)
+  @UseGuards(OrganizationGuard)
   @OrganizationRoles(OrganizationRole.OWNER, OrganizationRole.ADMIN)
   @ApiOperation({ summary: 'Update a member’s role in the organization' })
   async updateMemberRole(
@@ -69,8 +66,8 @@ export class OrganizationController {
   }
 
   @Delete(':orgId/members/:memberId')
-  @UseGuards(JwtAuthGuard, OrganizationGuard)
-  @OrganizationRoles(OrganizationRole.OWNER, OrganizationRole.ADMIN) // Only OWNER/ADMIN can remove members
+  @UseGuards(OrganizationGuard)
+  @OrganizationRoles(OrganizationRole.OWNER, OrganizationRole.ADMIN)
   @ApiOperation({ summary: 'Remove a member from the organization' })
   async removeMember(
     @Param('orgId') orgId: string,
@@ -81,7 +78,7 @@ export class OrganizationController {
   }
 
   @Post(':orgId/leave')
-  @UseGuards(JwtAuthGuard, OrganizationGuard) // Must be a member to leave
+  @UseGuards(OrganizationGuard)
   @ApiOperation({ summary: 'Leave the organization (self-removal)' })
   async leaveOrganization(@Param('orgId') orgId: string, @Request() req) {
     // We still need the user ID for this one, as it's about the user themselves.

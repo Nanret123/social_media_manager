@@ -12,6 +12,8 @@ import { RedisModule } from './redis/redis.module';
 import { PostsModule } from './posts/posts.module';
 import { SchedulerModule } from './posts/post-queue.module';
 import { OrganizationModule } from './organization/organization.module';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 
 
 @Module({
@@ -44,6 +46,11 @@ import { OrganizationModule } from './organization/organization.module';
     OrganizationModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService,
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+  ],
 })
 export class AppModule {}

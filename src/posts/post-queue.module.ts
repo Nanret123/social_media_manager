@@ -1,11 +1,10 @@
 import { Module } from '@nestjs/common';
 import { SchedulerService } from './scheduler.service';
-import { SchedulerController } from './scheduler.controller';
 import { BullModule } from '@nestjs/bull';
 import { PlatformsModule } from 'src/platforms/platforms.module';
 import { PrismaModule } from 'src/prisma/prisma.module';
 import { PostProcessor } from './post.processor';
-import { BullBoardModule } from './bull-board.module';
+import { BullBoardModule } from '../scheduler/bull-board.module';
 
 @Module({
   imports: [

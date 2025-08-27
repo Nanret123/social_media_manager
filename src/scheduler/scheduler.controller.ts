@@ -1,5 +1,5 @@
 import { Controller } from '@nestjs/common';
-import { SchedulerService } from './scheduler.service';
+import { SchedulerService } from '../posts/scheduler.service';
 
 @Controller('scheduler')
 export class SchedulerController {

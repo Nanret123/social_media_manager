@@ -73,7 +73,6 @@ export class OrganizationController {
     @Param('orgId') orgId: string,
     @Param('memberId') memberId: string,
   ) {
-    // Guard ensures user is ADMIN/OWNER. No need to pass userId.
     return this.organizationService.removeMember(orgId, memberId);
   }
 
@@ -81,7 +80,6 @@ export class OrganizationController {
   @UseGuards(OrganizationGuard)
   @ApiOperation({ summary: 'Leave the organization (self-removal)' })
   async leaveOrganization(@Param('orgId') orgId: string, @Request() req) {
-    // We still need the user ID for this one, as it's about the user themselves.
     return this.organizationService.leaveOrganization(orgId, req.user.id);
   }
 }

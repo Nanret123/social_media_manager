@@ -30,5 +30,28 @@ export class MailService {
       },
     });
   }
-}
 
+  async sendInvitationEmail(payload: {
+    to: string;
+    organizationName: string;
+    inviterName: string;
+    role: string;
+    token: string;
+  }) {
+    const invitationUrl = `${process.env.FRONTEND_URL}/accept-invitation?token=${payload.token}`;
+
+    await this.mailerService.sendMail({
+      to: payload.to,
+      subject: `You're invited to join ${payload.organizationName} on Rooli`,
+      template: './invitation',
+      context: {
+        invitationUrl,
+        organizationName: payload.organizationName,
+        inviterName: payload.inviterName,
+        role: payload.role,
+        year: new Date().getFullYear(),
+        frontendUrl: process.env.FRONTEND_URL,
+      },
+    });
+  }
+}

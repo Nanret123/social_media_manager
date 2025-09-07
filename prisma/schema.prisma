@@ -26,11 +26,25 @@ model User {
   updatedAt              DateTime       @updatedAt
 
   mediaFiles    MediaFile[]
-  posts         Post[]
   organizations OrganizationMember[] @relation("OrganizationMemberships")
 
   sentInvitations OrganizationInvitation[] @relation("SentInvitations")
   invitedMembers  OrganizationMember[]     @relation("OrganizationInviter")
+
+  aiUsage                     AiUsage[]
+  aiContentGenerations        AiContentGeneration[]
+  aiImageGenerations          AiImageGeneration[]
+  messages                    Message[]
+  participants                ConversationParticipant[]
+  notifications               Notification[]
+  analyticsReports            AnalyticsReport[]
+  BulkScheduleJob             BulkScheduleJob[]
+  ContentTemplate             ContentTemplate[]
+  MessageTemplate             MessageTemplate[]
+  ConversationLabelAssignment ConversationLabelAssignment[]
+  Post                        Post[]
+  approvalsRequested PostApproval[] @relation("ApprovalRequester")
+  approvalsGiven     PostApproval[] @relation("ApprovalApprover")
 }
 
 model RefreshToken {
@@ -71,14 +85,16 @@ model Post {
   authorId        String
   socialAccountId String
   content         String
-  mediaUrls       String[] // JSON array of media URLs
+  mediaUrls       String[]
   scheduledAt     DateTime?
   publishedAt     DateTime?
+  requesterId     String
+  approverId      String?
   status          PostStatus @default(DRAFT)
-  platformPostId  String? // ID returned from social platform
-  errorMessage    String? // Error details if publishing fails
+  platformPostId  String?
+  errorMessage    String?
   retryCount      Int        @default(0)
-  metadata        Json? // Platform-specific metadata
+  metadata        Json?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
@@ -87,7 +103,13 @@ model Post {
   socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
 
   media       PostMedia[]
+  analytics   PostAnalytics[]
   scheduleJob ScheduleJob?
+
+  // Relations to AI generations (optional)
+  aiContent    AiContentGeneration?
+  aiImage      AiImageGeneration?
+  PostApproval PostApproval?
 }
 
 model ScheduleJob {
@@ -139,7 +161,6 @@ model Organization {
   id                 String     @id @default(cuid())
   name               String
   slug               String     @unique
-  ownerId            String
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
   isActive           Boolean    @default(true)
@@ -153,6 +174,18 @@ model Organization {
   posts          Post[]
   mediaFiles     MediaFile[]
 
+  aiUsage              AiUsage[]
+  aiContentGenerations AiContentGeneration[]
+  aiImageGenerations   AiImageGeneration[]
+  conversations        Conversation[]
+  notifications        Notification[]
+  analyticsReports     AnalyticsReport[]
+  webhookEvents        WebhookEvent[]
+  PostingSchedule      PostingSchedule[]
+  BulkScheduleJob      BulkScheduleJob[]
+  ContentTemplate      ContentTemplate[]
+  MessageTemplate      MessageTemplate[]
+  ConversationLabel    ConversationLabel[]
 }
 
 model OrganizationMember {
@@ -166,27 +199,391 @@ model OrganizationMember {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation("OrganizationMemberships", fields: [userId], references: [id], onDelete: Cascade)
-  inviter      User?        @relation("OrganizationInviter", fields: [invitedBy], references: [id])
+  inviter      User?        @relation("OrganizationInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, userId])
+  @@index([userId, isActive])
 }
 
 model OrganizationInvitation {
   id             String           @id @default(cuid())
   email          String
   organizationId String
-  invitedBy      String
+  invitedBy      String?
   role           OrganizationRole @default(MEMBER)
   status         InvitationStatus @default(PENDING)
-  token          String           @unique @default(cuid())
+  token          String           @unique
   expiresAt      DateTime
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  inviter      User         @relation("SentInvitations", fields: [invitedBy], references: [id])
+  inviter      User?        @relation("SentInvitations", fields: [invitedBy], references: [id], onDelete: SetNull)
 
   @@unique([email, organizationId])
+  @@index([token])
+  @@index([email, status])
+}
+
+model AiContentGeneration {
+  id             String      @id @default(cuid())
+  organizationId String
+  userId         String
+  platform       Platform
+  contentType    ContentType
+  topic          String
+  tone           ToneType
+
+  prompt        String   @db.Text
+  generatedText String   @db.Text
+  hashtags      String[]
+
+  cost      Float    @default(0)
+  provider  String
+  model     String
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  post   Post?   @relation(fields: [postId], references: [id])
+  postId String? @unique
+
+  // 🔑 Back relation to AiUsage
+  usages AiUsage[] @relation("UsageContent")
+
+  @@index([organizationId, createdAt])
+  @@index([userId])
+}
+
+model AiImageGeneration {
+  id             String @id @default(cuid())
+  organizationId String
+  userId         String
+  prompt         String @db.Text
+
+  imageUrl      String
+  revisedPrompt String? @db.Text
+
+  cost      Float    @default(0)
+  provider  String
+  model     String
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  post   Post?   @relation(fields: [postId], references: [id])
+  postId String? @unique
+
+  // 🔑 Back relation to AiUsage
+  usages AiUsage[] @relation("UsageImage")
+
+  @@index([organizationId, createdAt])
+}
+
+model AiUsage {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  type           UsageType
+
+  contentGenerationId String?
+  imageGenerationId   String?
+
+  creditsUsed Int      @default(1)
+  createdAt   DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  contentGeneration AiContentGeneration? @relation("UsageContent", fields: [contentGenerationId], references: [id])
+  imageGeneration   AiImageGeneration?   @relation("UsageImage", fields: [imageGenerationId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+}
+
+// Conversation = a thread of messages with a user on a platform
+model Conversation {
+  id             String            @id @default(cuid())
+  organizationId String
+  platform       MessagingPlatform
+  externalId     String // ID from platform (e.g., IG DM thread ID, FB convo ID)
+  subject        String? // Optional: for LinkedIn/X future expansion
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  // Relations
+  organization                Organization                  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  messages                    Message[]
+  participants                ConversationParticipant[]
+  ConversationLabelAssignment ConversationLabelAssignment[]
+}
+
+model Message {
+  id             String        @id @default(cuid())
+  conversationId String
+  senderId       String? // null if external user
+  externalSender String? // username/id from platform
+  content        String?
+  mediaUrl       String? // optional image/video
+  status         MessageStatus @default(UNREAD)
+  sentAt         DateTime
+  createdAt      DateTime      @default(now())
+
+  // Relations
+  conversation  Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender        User?          @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  notifications Notification[]
+}
+
+model ConversationParticipant {
+  id             String          @id @default(cuid())
+  conversationId String
+  userId         String
+  role           ParticipantRole @default(MEMBER)
+  lastReadAt     DateTime?
+
+  // Relations
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum ParticipantRole {
+  MEMBER // regular participant
+  ASSIGNEE // responsible for handling
+  MENTIONED // tagged in conversation
+}
+
+// ========================
+// ANALYTICS & REPORTING
+// ========================
+
+model PostAnalytics {
+  id          String   @id @default(cuid())
+  postId      String
+  platform    Platform
+  likes       Int      @default(0)
+  shares      Int      @default(0)
+  comments    Int      @default(0)
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  reach       Int      @default(0)
+  saves       Int      @default(0) // Instagram/LinkedIn saves
+  videoViews  Int      @default(0)
+  syncedAt    DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, platform])
+  @@index([postId, syncedAt])
+}
+
+model AnalyticsReport {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  name           String
+  type           ReportType
+  dateRange      Json // {start: Date, end: Date}
+  platforms      Platform[]
+  filters        Json? // Additional filters
+  data           Json // Computed report data
+  format         ReportFormat @default(JSON)
+  fileUrl        String? // For PDF/Excel exports
+  status         ReportStatus @default(GENERATING)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+}
+
+// ========================
+// WEBHOOK & INTEGRATION
+// ========================
+
+model WebhookEvent {
+  id             String           @id @default(cuid())
+  organizationId String
+  platform       Platform
+  eventType      WebhookEventType
+  externalId     String? // Platform's event ID
+  payload        Json
+  processed      Boolean          @default(false)
+  processedAt    DateTime?
+  errorMessage   String?
+  retryCount     Int              @default(0)
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, processed, createdAt])
+  @@index([platform, eventType, processed])
+}
+
+
+model PostingSchedule {
+  id             String         @id @default(cuid())
+  organizationId String
+  platform       Platform
+  timezone       String         @default("UTC")
+  optimalTimes   Json // Array of {day: string, hours: number[]}
+  isActive       Boolean        @default(true)
+  lastUpdated    DateTime       @default(now())
+  source         ScheduleSource @default(AI_RECOMMENDATION)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, platform])
+}
+
+model BulkScheduleJob {
+  id             String             @id @default(cuid())
+  organizationId String
+  userId         String
+  name           String
+  totalPosts     Int
+  processedPosts Int                @default(0)
+  failedPosts    Int                @default(0)
+  status         BulkScheduleStatus @default(PROCESSING)
+  config         Json // Scheduling rules, platforms, etc.
+  startedAt      DateTime           @default(now())
+  completedAt    DateTime?
+  errorLog       String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+}
+
+model ContentTemplate {
+  id             String      @id @default(cuid())
+  organizationId String
+  userId         String
+  name           String
+  description    String?
+  platform       Platform
+  contentType    ContentType
+  template       Json // Template structure with placeholders
+  isPublic       Boolean     @default(false)
+  usageCount     Int         @default(0)
+  tags           String[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, platform, contentType])
+  @@index([isPublic, platform])
+}
+
+model PostApproval {
+  id          String         @id @default(cuid())
+  postId      String         @unique
+  requesterId String
+  approverId  String?
+  status      ApprovalStatus @default(PENDING)
+  comments    String?
+  requestedAt DateTime       @default(now())
+  reviewedAt  DateTime?
+
+  post      Post  @relation(fields: [postId], references: [id], onDelete: Cascade)
+  requester User  @relation("ApprovalRequester", fields: [requesterId], references: [id])
+  approver  User? @relation("ApprovalApprover", fields: [approverId], references: [id])
+
+  @@index([status, requestedAt])
+}
+
+model MessageTemplate {
+  id             String            @id @default(cuid())
+  organizationId String
+  userId         String
+  name           String
+  content        String            @db.Text
+  platform       MessagingPlatform
+  isActive       Boolean           @default(true)
+  usageCount     Int               @default(0)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, platform, isActive])
+}
+
+model ConversationLabel {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  color          String   @default("#808080")
+  description    String?
+  createdAt      DateTime @default(now())
+
+  organization  Organization                  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversations ConversationLabelAssignment[]
+
+  @@unique([organizationId, name])
+}
+
+model ConversationLabelAssignment {
+  id             String   @id @default(cuid())
+  conversationId String
+  labelId        String
+  assignedBy     String
+  createdAt      DateTime @default(now())
+
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  label        ConversationLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+  user         User              @relation(fields: [assignedBy], references: [id])
+
+  @@unique([conversationId, labelId])
+}
+
+model Notification {
+  id             String           @id @default(cuid())
+  userId         String
+  organizationId String
+  type           NotificationType
+  messageId      String? // if related to a specific message
+  read           Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  message      Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+}
+
+enum NotificationType {
+  NEW_MESSAGE
+  MENTION
+  ASSIGNMENT
+}
+
+enum MessageStatus {
+  UNREAD
+  READ
+  DELIVERED
+  FAILED
+}
+
+enum UsageType {
+  TEXT_GENERATION
+  IMAGE_GENERATION
+}
+
+enum GenerationStatus {
+  SUCCESS
+  FAILED
+  PENDING
 }
 
 enum OrganizationRole {
@@ -204,7 +601,7 @@ enum InvitationStatus {
 }
 
 enum Platform {
-  TWITTER
+  X
   LINKEDIN
   FACEBOOK
   INSTAGRAM
@@ -250,4 +647,99 @@ enum PlanStatus {
   INACTIVE
   CANCELLED
   PAST_DUE
+}
+
+enum ContentType {
+  POST
+  STORY
+  REEL
+  CAROUSEL
+  THREAD
+}
+
+enum GenerationType {
+  CAPTION
+  HASHTAGS
+  IMAGE
+}
+
+enum ToneType {
+  PROFESSIONAL
+  CASUAL
+  WITTY
+  EXCITED
+  INSPIRATIONAL
+  EDUCATIONAL
+}
+
+enum CostType {
+  TEXT_GENERATION
+  IMAGE_GENERATION
+  FINE_TUNING
+  EMBEDDING
+}
+
+enum AspectRatio {
+  SQUARE    @map("1:1")
+  LANDSCAPE @map("16:9")
+  PORTRAIT  @map("4:5")
+  VERTICAL  @map("9:16")
+}
+
+enum MessagingPlatform {
+  INSTAGRAM
+  FACEBOOK
+  X
+  LINKEDIN
+}
+
+enum ReportType {
+  ENGAGEMENT
+  PERFORMANCE
+  AUDIENCE
+  COMPETITOR
+  CUSTOM
+}
+
+enum ReportFormat {
+  JSON
+  PDF
+  EXCEL
+  CSV
+}
+
+enum ReportStatus {
+  GENERATING
+  COMPLETED
+  FAILED
+}
+
+enum WebhookEventType {
+  POST_PUBLISHED
+  POST_DELETED
+  COMMENT_RECEIVED
+  MESSAGE_RECEIVED
+  MENTION_RECEIVED
+  FOLLOWER_GAINED
+  FOLLOWER_LOST
+}
+
+enum ScheduleSource {
+  AI_RECOMMENDATION
+  MANUAL
+  ANALYTICS_BASED
+}
+
+enum BulkScheduleStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
 }

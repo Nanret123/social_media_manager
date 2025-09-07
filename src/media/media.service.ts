@@ -111,4 +111,32 @@ export class MediaService {
       throw new BadRequestException('Cloudinary upload failed');
     }
   }
+
+  async uploadImageFromUrl(
+  imageUrl: string,
+  options: {
+    folder: string;
+    public_id: string;
+    tags?: string[];
+  },
+): Promise<UploadResult> {
+  try {
+    const result = await cloudinary.uploader.upload(imageUrl, {
+      folder: options.folder,
+      public_id: options.public_id,
+      tags: options.tags,
+      resource_type: 'image',
+    });
+
+    return {
+      url: result.secure_url,
+      publicId: result.public_id,
+      width: result.width,
+      height: result.height,
+    };
+  } catch (error) {
+    throw new BadRequestException('Cloudinary URL upload failed');
+  }
+}
+
 }

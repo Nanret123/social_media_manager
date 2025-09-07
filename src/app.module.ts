@@ -14,6 +14,8 @@ import { SchedulerModule } from './posts/post-queue.module';
 import { OrganizationModule } from './organization/organization.module';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
+import { InvitationsModule } from './invitations/invitations.module';
+import { AiModule } from './ai/ai.module';
 
 
 @Module({
@@ -44,6 +46,10 @@ import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
     SchedulerModule,
 
     OrganizationModule,
+
+    InvitationsModule,
+
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService,

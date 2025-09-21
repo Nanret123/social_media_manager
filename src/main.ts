@@ -7,6 +7,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { LoggerMiddleware } from './common/middlewares/logger.middleware';
 import { BullBoardModule } from './scheduler/bull-board.module';
+import * as bodyParser from 'body-parser';
 
 
 async function bootstrap() {
@@ -47,6 +48,38 @@ async function bootstrap() {
  app.use(new LoggerMiddleware().use);
   const bullBoard = app.get(BullBoardModule);
   bullBoard.setup(app);
+
+    app.use('/webhooks', bodyParser.json({
+    verify: (req: any, res, buf) => {
+      req.rawBody = buf.toString();
+    }
+  }));
+  
+  // Other middleware for other routes
+  app.use(bodyParser.json());
+
+  // // Get worker manager and initialize
+  // const workerManager = app.get(WorkerManager);
+  // // Workers auto-initialize via onModuleInit
+
+  // // Capture raw body for webhook signature verification
+  // app.use(
+  //   bodyParser.json({
+  //     verify: (req: any, _res, buf) => {
+  //       req.rawBody = buf.toString(); // keep raw JSON string
+  //     },
+  //   }),
+  // );
+
+  //  // Enable graceful shutdown
+  // app.enableShutdownHooks();
+  
+  // // app.use('/health', (req, res) => {
+  // //   const workerManager = app.get(WorkerManager);
+  // //   const health = workerManager.healthCheck();
+  // //   res.json(health);
+  // // });
+  
   await app.listen(process.env.PORT ?? 3000);
 }
 bootstrap();

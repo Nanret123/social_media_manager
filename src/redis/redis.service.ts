@@ -36,4 +36,40 @@ export class RedisService {
   async expire(key: string, ttlSeconds: number): Promise<number> {
     return this.client.expire(key, ttlSeconds);
   }
+
+  // --- Lua Script helpers ---
+  async loadScript(script: string): Promise<string> {
+    const sha = await this.client.script('LOAD', script);
+    return sha as string;
+  }
+
+  async flushScripts(): Promise<'OK'> {
+    const result = await this.client.script('FLUSH');
+    return result as 'OK';
+  }
+
+  async killScript(): Promise<'OK'> {
+    const result = await this.client.script('KILL');
+    return result as 'OK';
+  }
+
+  async eval(
+    script: string,
+    numKeys: number,
+    ...args: (string | number)[]
+  ): Promise<any> {
+    return this.client.eval(script, numKeys, ...args);
+  }
+
+  async evalsha(
+    sha: string,
+    numKeys: number,
+    ...args: (string | number)[]
+  ): Promise<any> {
+    return this.client.evalsha(sha, numKeys, ...args);
+  }
+
+  getClient(): Redis {
+    return this.client; // expose raw Redis client for BullMQ Worker/Queue
+  }
 }

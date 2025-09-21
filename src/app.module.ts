@@ -16,6 +16,19 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { InvitationsModule } from './invitations/invitations.module';
 import { AiModule } from './ai/ai.module';
+import { MessagingModule } from './messaging/messaging.module';
+import { TemplatesModule } from './templates/templates.module';
+import { PostAnalyticsModule } from './post-analytics/post-analytics.module';
+import { WebhookModule } from './webhook/webhook.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { NotificationModule } from './notification/notification.module';
+import { SocialIntegrationModule } from './social-integration/social-integration.module';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
+import { BrandKitModule } from './brand-kit/brand-kit.module';
+import { ReportsModule } from './reports/reports.module';
+import { AuditModule } from './audit/audit.module';
+import { PollingModule } from './polling/polling.module';
+import { SocialAccountModule } from './social-account/social-account.module';
 
 
 @Module({
@@ -50,6 +63,32 @@ import { AiModule } from './ai/ai.module';
     InvitationsModule,
 
     AiModule,
+
+    MessagingModule,
+
+    TemplatesModule,
+
+    PostAnalyticsModule,
+
+    WebhookModule,
+
+    AnalyticsModule,
+
+    NotificationModule,
+
+    SocialIntegrationModule,
+
+    RateLimitModule,
+
+    BrandKitModule,
+
+    ReportsModule,
+
+    AuditModule,
+
+    PollingModule,
+
+    SocialAccountModule,
   ],
   controllers: [AppController],
   providers: [AppService,

@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { FileUploadController } from './file-upload.controller';
+import { FileUploadController } from './media.controller';
 import { FileUploadService } from './media.service';
 
 describe('FileUploadController', () => {

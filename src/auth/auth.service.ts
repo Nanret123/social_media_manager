@@ -279,34 +279,40 @@ export class AuthService {
   }
 
   private async generateTokens(user: User): Promise<{ accessToken: string; refreshToken: string }> {
-    const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    };
+  const payload: JwtPayload = {
+    sub: user.id,
+    email: user.email,
+    role: user.role,
+  };
 
-    const accessToken = this.jwtService.sign(payload, {
-      secret: this.configService.get('JWT_SECRET'),
-      expiresIn: this.configService.get('JWT_EXPIRES_IN'),
-    });
+  const accessToken = this.jwtService.sign(payload, {
+    secret: this.configService.get('JWT_SECRET'),
+    expiresIn: this.configService.get('JWT_EXPIRES_IN'),
+  });
 
-    const refreshToken = this.jwtService.sign(payload, {
-      secret: this.configService.get('JWT_REFRESH_SECRET'),
-      expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN'),
-    });
+  const refreshToken = this.jwtService.sign(payload, {
+    secret: this.configService.get('JWT_REFRESH_SECRET'),
+    expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN'),
+  });
 
-    // Store refresh token
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days
+  // Hash before saving
+  const hashedToken = crypto.createHash('sha256').update(refreshToken).digest('hex');
+  const { exp } = this.jwtService.decode(refreshToken) as { exp: number };
 
-    await this.prisma.refreshToken.create({
-      data: {
-        token: refreshToken,
-        userId: user.id,
-        expiresAt,
-      },
-    });
+  // Upsert (replace old one if exists)
+  await this.prisma.refreshToken.upsert({
+    where: { userId: user.id },
+    update: {
+      token: hashedToken,
+      expiresAt: new Date(exp * 1000),
+    },
+    create: {
+      token: hashedToken,
+      userId: user.id,
+      expiresAt: new Date(exp * 1000),
+    },
+  });
 
-    return { accessToken, refreshToken };
-  }
+  return { accessToken, refreshToken };
+}
 }

@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import OpenAI from "openai";
 
 @Injectable()
-export class OpenAIService {
+export class OpenAiProvider {
   private openai: OpenAI;
 
   constructor() {
@@ -11,17 +11,23 @@ export class OpenAIService {
     });
   }
 
-  async createCompletion(options: {
-    model: string;
-    prompt: string;
-    max_tokens: number;
-    temperature: number;
-  }) {
-    return this.openai.completions.create({
-      model: options.model,
-      prompt: options.prompt,
-      max_tokens: options.max_tokens,
-      temperature: options.temperature,
+  async generateText(prompt: string) {
+    const response = await this.openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a professional social media content creator. Return responses in JSON format.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      max_tokens: 1000,
+      temperature: 0.7,
     });
+
+    return response;
   }
 }

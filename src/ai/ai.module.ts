@@ -1,10 +1,18 @@
 import { Module } from '@nestjs/common';
-import { AiService } from './ai.service';
-import { AiController } from './ai.controller';
-import { UsageService } from './usage.service';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { OpenAiProvider } from './providers/openai.service';
+import { AiContentService } from './services/ai-content.service';
+import { AiImageService } from './services/ai-image.service';
+import { AiUsageService } from './services/ai-usage.service';
+
 
 @Module({
   controllers: [AiController],
-  providers: [AiService, UsageService],
+  providers: [AiContentService,
+    AiImageService,
+    AiUsageService,
+    OpenAiProvider,
+    ReplicateProvider,
+    PrismaService,],
 })
 export class AiModule {}

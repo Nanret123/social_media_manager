@@ -15,6 +15,8 @@ import { OrganizationModule } from './organization/organization.module';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { InvitationsModule } from './invitations/invitations.module';
+import { BillingModule } from './billing/billing.module';
+import { MembersModule } from './members/members.module';
 import { AiModule } from './ai/ai.module';
 import { MessagingModule } from './messaging/messaging.module';
 import { TemplatesModule } from './templates/templates.module';
@@ -29,6 +31,8 @@ import { ReportsModule } from './reports/reports.module';
 import { AuditModule } from './audit/audit.module';
 import { PollingModule } from './polling/polling.module';
 import { SocialAccountModule } from './social-account/social-account.module';
+import { OrganizationsModule } from './organizations/organizations.module';
+import { InvitationsModule } from './invitations/invitations.module';
 
 
 @Module({
@@ -89,6 +93,12 @@ import { SocialAccountModule } from './social-account/social-account.module';
     PollingModule,
 
     SocialAccountModule,
+
+    OrganizationsModule,
+
+    MembersModule,
+
+    BillingModule,
   ],
   controllers: [AppController],
   providers: [AppService,

@@ -37,6 +37,7 @@ export class MailService {
     inviterName: string;
     role: string;
     token: string;
+    message: string;
   }) {
     const invitationUrl = `${process.env.FRONTEND_URL}/accept-invitation?token=${payload.token}`;
 
@@ -50,6 +51,7 @@ export class MailService {
         inviterName: payload.inviterName,
         role: payload.role,
         year: new Date().getFullYear(),
+        message: payload.message,
         frontendUrl: process.env.FRONTEND_URL,
       },
     });

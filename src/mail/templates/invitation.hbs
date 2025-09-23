@@ -52,6 +52,12 @@
         {{inviterName}} has invited you to join the <strong>{{organizationName}}</strong>
         organization as a <strong>{{role}}</strong>.
       </p>
+      <p>
+        {{#if message}}
+          <em>"{{message}}"</em>
+        {{/if}}
+      </p>
+          
 
       <p>
         To accept this invitation, click the button below. This invitation will

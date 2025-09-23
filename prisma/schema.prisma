@@ -23,19 +23,19 @@ model User {
   resetPasswordExpires   DateTime?
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
+  lastActiveAt            DateTime?
 
   mediaFiles    MediaFile[]
   organizations OrganizationMember[] @relation("OrganizationMemberships")
 
   sentInvitations OrganizationInvitation[] @relation("SentInvitations")
-  invitedMembers  OrganizationMember[]     @relation("OrganizationInviter")
+  memberships  OrganizationMember[]     @relation("OrganizationInviter")
 
   aiContentGenerations AiContentGeneration[]
   aiImageGenerations   AiImageGeneration[]
   messages             Message[]
   notifications        Notification[]
   ContentTemplate      ContentTemplate[]
-  MessageTemplate      MessageTemplate[]
   Post                 Post[]
   approvalsRequested   PostApproval[]        @relation("ApprovalRequester")
   approvalsGiven       PostApproval[]        @relation("ApprovalApprover")
@@ -105,7 +105,7 @@ model Post {
   aiContent          AiContentGeneration?
   aiImageGenerations AiImageGeneration[]
 
-  metrics EngagementMetric[]
+  metrics       EngagementMetric[]
   notifications Notification[]
 
   organizationId String
@@ -140,7 +140,7 @@ model MediaFile {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   isAIGenerated       Boolean  @default(false)
-  aiGenerationContext String?
+  aiGenerationContext Json?
   // Not unique to allow multiple files per generation:
   aiGenerationId      String?
 
@@ -177,14 +177,30 @@ model Organization {
   webhookEvents        WebhookEvent[]
   PostingSchedule      PostingSchedule[]
   ContentTemplate      ContentTemplate[]
-  MessageTemplate      MessageTemplate[]
   auditLogs            AuditLog[]
 
   aiUsages AIUsage[]
   posts    Post[]
+   subscription     Subscription?
+  invoices         Invoice[]
+  creditTransactions CreditTransaction[]
 
-  brandKit         BrandKit?
+  brandKit         BrandKit[]
   EngagementMetric EngagementMetric[]
+
+  // billing and limits
+  monthlyCreditLimit Int?    @default(1000) // NULL = unlimited for enterprise
+  maxMembers         Int     @default(5) // Based on your "up to 5 team members"
+  billingEmail       String?
+  timezone           String  @default("UTC")
+  currency           String  @default("USD")
+
+  trialEndsAt   DateTime?
+  trialExtended Boolean   @default(false)
+  settings      Json?
+
+  @@index([planTier, planStatus])
+  @@index([trialEndsAt])
 }
 
 model OrganizationMember {
@@ -196,12 +212,17 @@ model OrganizationMember {
   joinedAt       DateTime         @default(now())
   isActive       Boolean          @default(true) // Soft delete flag
 
+  permissions  Json?
+  lastActiveAt DateTime?
+
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation("OrganizationMemberships", fields: [userId], references: [id], onDelete: Cascade)
   inviter      User?        @relation("OrganizationInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, userId])
   @@index([userId, isActive])
+  @@index([organizationId, role])
+  @@index([lastActiveAt])
 }
 
 model OrganizationInvitation {
@@ -215,12 +236,18 @@ model OrganizationInvitation {
   expiresAt      DateTime
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
+  resentAt       DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   inviter      User?        @relation("SentInvitations", fields: [invitedBy], references: [id], onDelete: SetNull)
 
-  @@unique([email, organizationId])
+  message        String?      
+  permissions    Json?
+
+ @@unique([email, organizationId, status]) // Allow re-invite after expiration
   @@index([token])
+  @@index([expiresAt]) // For cleanup jobs
+  @@index([organizationId, createdAt]) // For org invitation history
   @@index([email, status])
 }
 
@@ -257,17 +284,19 @@ model AiContentGeneration {
 }
 
 model AiImageGeneration {
-  id             String   @id @default(cuid())
+  id             String           @id @default(cuid())
   organizationId String
   userId         String
-  prompt         String   @db.Text
+  prompt         String           @db.Text
   creditsUsed    Int
+  status         GenerationStatus @default(PENDING)
   imageUrl       String?
-  revisedPrompt  String?  @db.Text
-  cost           Float    @default(0)
+  publicId       String?
+  revisedPrompt  String?          @db.Text
+  cost           Float            @default(0)
   provider       String
   model          String
-  createdAt      DateTime @default(now())
+  createdAt      DateTime         @default(now())
 
   // RELATIONS
   // Allow 0..N media files produced for this generation (safer than forcing 1:1)
@@ -340,51 +369,67 @@ model Message {
   notifications Notification[]
 }
 
-model MessageTemplate {
-  id             String   @id @default(cuid())
-  organizationId String
-  name           String
-  content        String   @db.Text
-  isActive       Boolean  @default(true)
-  usageCount     Int      @default(0)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+enum TemplateCategory {
+  PROMOTIONAL
+  EDUCATIONAL
+  ENGAGEMENT
+  ANNOUNCEMENT
+  EVENT
+  PRODUCT
+  TESTIMONIAL
+  UGC
+  HOLIDAY
+  INDUSTRY_NEWS
+}
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  User         User?        @relation(fields: [userId], references: [id])
-  userId       String?
-
-  @@index([organizationId, isActive])
+enum TemplateStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+  DELETED
 }
 
 model ContentTemplate {
-  id             String           @id @default(cuid())
-  organizationId String? // Null for system templates
-  userId         String // Creator
+  id             String  @id @default(cuid())
+  organizationId String?
+  userId         String
   name           String
   description    String?
-  category       TemplateCategory
-  platform       String
-  content        Json // TemplateContent structure
-  tags           String[]
-  isPublic       Boolean          @default(false)
-  status         TemplateStatus   @default(DRAFT)
-  usageCount     Int              @default(0)
-  lastUsedAt     DateTime?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+
+  // Template metadata
+  platform    Platform
+  contentType ContentType
+  category    TemplateCategory
+  tags        String[]
+
+  // Template content
+  content Json // TemplateContent structure
+  example String? // Example filled template
+
+  // Status & usage
+  isPublic   Boolean        @default(false)
+  status     TemplateStatus @default(DRAFT)
+  usageCount Int            @default(0)
+  lastUsedAt DateTime?
+
+  // Brand integration
+  brandKitId String?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandKit     BrandKit?     @relation(fields: [brandKitId], references: [id], onDelete: SetNull)
 
-  brandKitId String?
-  brandKit   BrandKit? @relation(fields: [brandKitId], references: [id], onDelete: SetNull)
-
-  @@index([organizationId, platform])
-  @@index([isPublic, platform, category])
+  @@index([organizationId, platform, contentType])
+  @@index([isPublic, platform, category, status])
   @@index([userId, status])
-  @@index([tags]) // For tag-based searching
+  @@index([tags])
+  @@index([brandKitId])
+  @@map("content_templates")
 }
 
 model PlatformRateLimitLog {
@@ -518,27 +563,27 @@ model PostApproval {
 }
 
 model Notification {
-  id             String           @id @default(cuid())
+  id             String               @id @default(cuid())
   userId         String
   organizationId String
   type           NotificationType
   title          String
   content        String
-  data           Json?            // Flexible data storage
+  data           Json? // Flexible data storage
   priority       NotificationPriority @default(NORMAL)
-  read           Boolean          @default(false)
-  expiresAt      DateTime?        // Auto-cleanup of old notifications
-  createdAt      DateTime         @default(now())
+  read           Boolean              @default(false)
+  expiresAt      DateTime? // Auto-cleanup of old notifications
+  createdAt      DateTime             @default(now())
 
   // Relations
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   message      Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
   post         Post?        @relation(fields: [postId], references: [id], onDelete: SetNull)
-  
+
   // Optional references
-  messageId    String?
-  postId       String?
+  messageId String?
+  postId    String?
 
   @@index([userId, read])
   @@index([createdAt])
@@ -562,128 +607,220 @@ enum NotificationPriority {
 }
 
 model AuditLog {
-  id             String      @id @default(cuid())
-  // Who did it?
-  userId         String // The actor's User ID
-  userEmail      String // Denormalized for instant readability in logs
-  organizationId String // The scope of the action
-  // What did they do?
-  action         AuditAction // e.g., CREATE, UPDATE, DELETE, LOGIN, INVITE
-  // What did they do it to?
-  entityType     String // The Prisma model name, e.g., "Post", "User", "SocialAccount"
-  entityId       String // The ID of the affected record
-  // What changed?
-  oldData        Json? // The previous state of the record (for UPDATE)
-  newData        Json? // The new state of the record (for CREATE/UPDATE)
-  // Context
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String   // Who performed the action
+  action         String   // "member_invited", "member_removed", "plan_changed"
+  resourceType   String   // "organization", "member", "invitation"
+  resourceId     String?  // ID of the affected resource
+  details        Json?    // { oldRole: "MEMBER", newRole: "ADMIN" }
   ipAddress      String?
   userAgent      String?
-  createdAt      DateTime    @default(now())
+  createdAt      DateTime @default(now())
 
-  // Relations (optional, but useful for cascading deletes or queries)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Indexes for performant filtering
   @@index([organizationId, createdAt])
-  @@index([entityType, entityId])
-  @@index([userId, createdAt])
-  @@index([action, createdAt])
+  @@index([action, resourceType])
 }
 
-// model AuditLog {
-//   id             String   @id @default(cuid())
-//   organizationId String? // Optional for system-wide actions
-//   userId         String
-//   userEmail      String
-//   userRole       String
-//   action         String // CREATE, UPDATE, DELETE, etc.
-//   resource       String // USER, POST, ORGANIZATION, etc.
-//   resourceId     String? // ID of the affected resource
-//   description    String
-//   ipAddress      String
-//   userAgent      String
-//   metadata       Json? // Additional context data
-//   status         String // SUCCESS or FAILED
-//   error          String?
-//   createdAt      DateTime @default(now())
-
-//   // Relations
-//   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-//   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-//   @@index([organizationId, createdAt])
-//   @@index([userId, createdAt])
-//   @@index([action, createdAt])
-//   @@index([resource, createdAt])
-//   @@index([status, createdAt])
-//   @@index([createdAt])
-// }
-
 model BrandKit {
-  id             String  @id @default(cuid())
-  organizationId String  @unique // One brand kit per organization
-  name           String
-  description    String?
+  id             String @id @default(cuid())
+  organizationId String
+  name           String @default("Our Brand")
+  version        Int    @default(1) // For version tracking
 
-  // Visual Identity
-  logoUrl    String?
-  faviconUrl String?
+  // Visual identity - flexible JSON structure
+  logoUrl String?
+  colors  Json? // { primary: "#1E40AF", secondary: "#F59E0B", ... }
 
-  // Colors
-  colors BrandColor[]
+  // Brand voice
+  brandVoice String? @db.VarChar(500)
+  tone       String? // Could use enum or free text
+  guidelines Json? // Additional brand guidelines
 
-  // Typography
-  fonts BrandFont[]
-
-  // Voice & Messaging
-  brandVoice  BrandVoice?
-  brandWords  String[] // Preferred terminology
-  bannedWords String[] // Words to avoid
-
-  // Social Media
-  socialHandles Json? // { twitter: "@handle", instagram: "@handle" }
-  websiteUrl    String?
+  // Social identity
+  socialHandles Json? // { twitter: "@company", instagram: "@company" }
 
   // Status
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isActive  Boolean   @default(true)
+  isDefault Boolean   @default(false) // Mark as default brand kit
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   // Relations
   organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  templates            ContentTemplate[]
   aiContentGenerations AiContentGeneration[]
   aiImageGenerations   AiImageGeneration[]
+  ContentTemplate      ContentTemplate[]
+
+  @@unique([organizationId, isActive], map: "one_active_brandkit_per_org")
+  @@index([organizationId])
+  @@index([isActive])
 }
 
-model BrandColor {
-  id         String         @id @default(cuid())
-  brandKitId String
-  name       String
-  value      String // Hex code: #1E40AF
-  type       BrandColorType
-  order      Int            @default(0) // For sorting
 
-  brandKit BrandKit @relation(fields: [brandKitId], references: [id], onDelete: Cascade)
-
-  @@unique([brandKitId, name])
-  @@unique([brandKitId, value])
+enum BillingInterval {
+  MONTHLY
+  YEARLY
 }
 
-model BrandFont {
-  id         String       @id @default(cuid())
-  brandKitId String
-  name       String // Font name: "Inter"
-  category   FontCategory
-  weight     String? // "400", "700", etc.
-  isCustom   Boolean      @default(false)
-  customUrl  String? // For custom font files
-
-  brandKit BrandKit @relation(fields: [brandKitId], references: [id], onDelete: Cascade)
-
-  @@unique([brandKitId, category])
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  UNCOLLECTIBLE
 }
+
+model Subscription {
+  id                 String           @id @default(cuid())
+  organizationId     String           @unique
+  stripeSubscriptionId String?         @unique
+  stripeCustomerId   String?          @unique
+  
+  // Plan details
+  planTier          PlanTier
+  billingInterval   BillingInterval   @default(MONTHLY)
+  status            PlanStatus        @default(TRIALING)
+  
+  // Pricing
+  unitAmount        Int               // in cents
+  currency          String            @default("usd")
+  
+  // Limits
+  monthlyCreditLimit Int?
+  maxMembers         Int
+  
+  // Billing dates
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAt           DateTime?
+  canceledAt         DateTime?
+  
+  // Trial
+  trialStart        DateTime?
+  trialEnd          DateTime?
+  
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices          Invoice[]
+  usageRecords      UsageRecord[]
+
+  @@index([status])
+  @@index([currentPeriodEnd])
+  @@index([trialEnd])
+}
+
+model Invoice {
+  id                 String           @id @default(cuid())
+  subscriptionId     String
+  stripeInvoiceId    String?          @unique
+  number             String?          // Human-readable invoice number
+  status             InvoiceStatus    @default(DRAFT)
+  
+  // Amounts
+  amountDue          Int              // in cents
+  amountPaid         Int              @default(0)
+  tax                Int              @default(0)
+  currency           String           @default("usd")
+  
+  // Dates
+  invoiceDate        DateTime?
+  dueDate            DateTime?
+  paidAt             DateTime?
+  
+  // PDF
+  invoicePdfUrl      String?
+  
+  // Line items (simplified - could be separate table for complex cases)
+  lineItems          Json             // Array of { description, amount, quantity }
+  
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId     String
+  subscription       Subscription     @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([dueDate])
+  @@index([subscriptionId, createdAt])
+}
+
+model UsageRecord {
+  id                 String           @id @default(cuid())
+  subscriptionId     String
+  date               DateTime         // Date of usage
+  metric             String           // "ai_tokens", "image_generations", "posts"
+  quantity           Int              // Amount used
+  recordedAt         DateTime         @default(now())
+
+  subscription       Subscription     @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, date, metric])
+  @@index([date, metric])
+}
+
+model CreditTransaction {
+  id                 String           @id @default(cuid())
+  organizationId     String
+  type               CreditType       // PURCHASE, USAGE, REFUND, BONUS
+  amount             Int              // Can be positive (purchase) or negative (usage)
+  description        String
+  referenceId        String?          // Stripe payment intent ID or usage record ID
+  balanceAfter       Int              // Running balance after this transaction
+  
+  createdAt          DateTime         @default(now())
+
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([type, createdAt])
+}
+
+enum CreditType {
+  PURCHASE
+  USAGE
+  REFUND
+  BONUS
+  ADJUSTMENT
+}
+
+
+enum PlanTier {
+  FREE
+  STARTER
+  PROFESSIONAL  
+  ENTERPRISE
+}
+
+enum PlanStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+}
+
+enum OrganizationRole {
+  OWNER       // Full access, can delete org
+  ADMIN       // Manage members, billing, settings
+  EDITOR      // Create content, schedule posts
+  ANALYST     // View analytics only
+  MEMBER      // Basic access
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
 
 enum AuditAction {
   CREATE
@@ -699,20 +836,6 @@ enum MessageStatus {
   READ
   DELIVERED
   FAILED
-}
-
-enum OrganizationRole {
-  OWNER
-  ADMIN
-  MANAGER
-  MEMBER
-}
-
-enum InvitationStatus {
-  PENDING
-  ACCEPTED
-  DECLINED
-  EXPIRED
 }
 
 enum Platform {
@@ -751,18 +874,6 @@ enum AuthProvider {
   GOOGLE
 }
 
-enum PlanTier {
-  FREE
-  PRO
-  BUSINESS
-}
-
-enum PlanStatus {
-  ACTIVE
-  INACTIVE
-  CANCELLED
-  PAST_DUE
-}
 
 enum ContentType {
   POST
@@ -840,27 +951,6 @@ enum ApprovalStatus {
   CANCELLED
 }
 
-enum TemplateCategory {
-  ANNOUNCEMENT
-  PROMOTIONAL
-  EDUCATIONAL
-  ENGAGEMENT
-  EVENT
-  PRODUCT
-  SERVICE
-  TESTIMONIAL
-  UGC // User-Generated Content
-  HOLIDAY
-  SEASONAL
-  TRENDING
-}
-
-enum TemplateStatus {
-  DRAFT
-  PUBLISHED
-  ARCHIVED
-}
-
 enum BrandColorType {
   PRIMARY
   SECONDARY
@@ -894,3 +984,11 @@ enum EngagementType {
   MENTION
   REACTION
 }
+
+enum GenerationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+

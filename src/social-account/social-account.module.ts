@@ -5,5 +5,6 @@ import { SocialAccountController } from './social-account.controller';
 @Module({
   controllers: [SocialAccountController],
   providers: [SocialAccountService],
+  exports: [SocialAccountService],
 })
 export class SocialAccountModule {}

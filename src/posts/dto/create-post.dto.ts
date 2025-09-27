@@ -1,41 +1,61 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsUUID, IsString, IsOptional, IsArray, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsUUID, IsBoolean } from 'class-validator';
 
-export class CreatePost {
-  @ApiProperty({
-    description: 'The ID of the connected social account to post from',
-    example: 'b3e3f8e9-3d7c-42c5-8e0d-9b7a54c88e4c',
-  })
+export class CreatePostDto {
+  @ApiProperty({ description: 'Organization ID this post belongs to' })
+  @IsUUID()
+  organizationId: string;
+
+  @ApiProperty({ description: 'User ID creating the post' })
+  @IsUUID()
+  userId: string;
+
+  @ApiProperty({ description: 'Social account to publish under' })
   @IsUUID()
   socialAccountId: string;
 
-  @ApiProperty({
-    description: 'The main content of the post',
-    example: 'Excited to announce our new AI-powered feature today!',
-  })
+  @ApiProperty({ description: 'Main content of the post' })
   @IsString()
   content: string;
 
-  @ApiProperty({
-    description: 'List of media URLs (e.g., images hosted on Cloudinary)',
-    example: [
-      'https://res.cloudinary.com/demo/image/upload/v1234567890/sample1.jpg',
-      'https://res.cloudinary.com/demo/image/upload/v1234567890/sample2.jpg',
-    ],
-    required: false,
-    type: [String],
-  })
+  @ApiProperty({ description: 'Media URLs', required: false, type: [String] })
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
   mediaUrls?: string[];
 
-  @ApiProperty({
-    description: 'When the post should be published (ISO 8601 datetime)',
-    example: '2025-08-25T15:00:00.000Z',
-    required: false,
-  })
+  @ApiProperty({ description: 'Media file IDs already uploaded', required: false })
   @IsOptional()
-  @IsDateString()
+  @IsArray()
+  mediaFileIds?: string[];
+
+  @ApiProperty({ description: 'Whether post requires approval workflow', default: false })
+  @IsOptional()
+  @IsBoolean()
+  requiresApproval?: boolean;
+
+  @ApiProperty({ description: 'AI content ID if generated via AI', required: false })
+  @IsOptional()
+  @IsUUID()
+  aiContentId?: string;
+
+  @ApiProperty({ description: 'Platform (facebook, instagram, x, linkedin)' })
+  @IsString()
+  platform: string;
+
+  @ApiProperty({ description: 'Content type (post, story, reel, etc.)' })
+  @IsString()
+  contentType: string;
+
+  @ApiProperty({ description: 'Extra metadata like hashtags, mentions', required: false })
+  @IsOptional()
+  metadata?: Record<string, any>;
+
+  @ApiProperty({ description: 'Scheduled time for the post', required: false })
+  @IsOptional()
   scheduledAt?: Date;
+
+  @ApiProperty({ description: 'Flag to publish immediately without scheduling', required: false, default: false })
+  @IsOptional()
+  @IsBoolean()
+  publishImmediately?: boolean; // internal use only
 }

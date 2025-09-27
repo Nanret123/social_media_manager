@@ -1,35 +1,48 @@
-// common/guards/organization.guard.ts
 import {
+  Injectable,
   CanActivate,
   ExecutionContext,
-  Injectable,
+  ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuthenticatedUser } from '../decorators/permissions.decorator';
 
 @Injectable()
 export class OrganizationGuard implements CanActivate {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const orgId = request.params.orgId || request.params.id;
-    const userId = request.user.id;
+    const user: AuthenticatedUser = request.user;
 
-    if (!orgId) return false;
+    if (!user) {
+      return false;
+    }
 
-    const membership = await this.prisma.organizationMember.findFirst({
+    const organizationId = request.params.organizationId || request.body.organizationId;
+
+    if (!organizationId) {
+      throw new BadRequestException('Organization ID is required');
+    }
+
+    // Check if user is a member of the organization
+    const membership = await this.prisma.organizationMember.findUnique({
       where: {
-        organizationId: orgId,
-        userId: userId,
+        organizationId_userId: {
+          organizationId,
+          userId: user.id,
+        },
+      },
+      select: {
         isActive: true,
       },
     });
 
-    if (membership) {
-      request.organization = { id: orgId };
-      return true;
+    if (!membership || !membership.isActive) {
+      throw new ForbiddenException('User is not a member of this organization');
     }
 
-    return false;
+    return true;
   }
 }

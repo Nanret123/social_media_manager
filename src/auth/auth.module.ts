@@ -1,14 +1,12 @@
 import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtService } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { GoogleStrategy } from './strategies/google.strategy';
 import { JwtStrategy } from './strategies/jwt.strategy';
-import { LocalStrategy } from './strategies/local.strategy';
 import { MailService } from 'src/mail/mail.service';
 
 @Module({
@@ -40,8 +38,8 @@ ThrottlerModule.forRoot({
     PrismaService,
     MailService,
     JwtStrategy,
-    LocalStrategy,
-    GoogleStrategy,
+    JwtService,
   ],
+  exports:[JwtService]
 })
 export class AuthModule {}

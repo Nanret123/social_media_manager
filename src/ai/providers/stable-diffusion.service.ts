@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import Replicate from 'replicate';
+const Replicate = require('replicate');  
 
 @Injectable()
 export class StableDiffusionProvider {
-  private replicate: Replicate;
+  private replicate;
 
   constructor() {
     this.replicate = new Replicate({

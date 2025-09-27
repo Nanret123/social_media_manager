@@ -22,14 +22,18 @@ export class InboxListener {
 
   constructor(private readonly inboxService: MessagingService) {}
 
-  @OnEvent('message.received')
+  @OnEvent('message.received', { async: true })
   async handleMessageReceived(event: MessageReceivedEvent) {
-    this.logger.debug(`Processing message from ${event.platform}: ${event.messageData.id}`);
-    
+    this.logger.debug(
+      `Processing message from ${event.platform}: ${event.messageData.id}`,
+    );
+
     try {
       await this.inboxService.processIncomingMessage(event);
     } catch (error) {
-      this.logger.error(`Failed to process message ${event.messageData.id}:`, error);
+      this.logger.error(
+        `Failed to process message ${event.messageData.id}: ${error.message}`,
+      );
     }
   }
 }

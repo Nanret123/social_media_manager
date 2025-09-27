@@ -1,69 +1,81 @@
 import {
   Controller,
-  UseGuards,
   Post,
   Param,
   Body,
   Get,
-  Patch,
   Delete,
   Req,
 } from '@nestjs/common';
-import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
-import { OrganizationGuard } from 'src/common/guards/organization.guard';
 import { InviteMemberDto } from './dtos/invite-member.dto';
 import { InvitationsService } from './invitations.service';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+} from '@nestjs/swagger';
 
-@Controller('organizations/:orgId/invitations')
-@UseGuards(JwtAuthGuard, OrganizationGuard)
+@ApiTags('Invitations')
+@ApiBearerAuth()
+@Controller()
 export class InvitationsController {
   constructor(private readonly invitationsService: InvitationsService) {}
 
-  @Post()
-  inviteMember(
+  @Post('organizations/:orgId/invitations')
+  @ApiOperation({ summary: 'Invite a new member to the organization' })
+  @ApiResponse({ status: 201, description: 'Invitation created successfully' })
+  @ApiResponse({
+    status: 400,
+    description: 'Member limit reached or invalid data',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'User already invited or already a member',
+  })
+  async inviteMember(
     @Param('orgId') orgId: string,
-    @Req() req,
-    @Body() inviteMemberDto: InviteMemberDto,
+    @Req() req: any,
+    @Body() dto: InviteMemberDto,
   ) {
-    return this.invitationsService.inviteMember(
-      orgId,
-      req.user.id,
-      inviteMemberDto,
-    );
+    return this.invitationsService.inviteMember(orgId, req.user.id, dto);
   }
 
-  @Get()
-  getInvitations(@Param('orgId') orgId: string) {
-    return this.invitationsService.getOrganizationInvitations(orgId);
+  @Post('invitations/accept/:token')
+  @ApiOperation({ summary: 'Accept an invitation' })
+  @ApiResponse({
+    status: 200,
+    description: 'Invitation accepted, membership created',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invitation already processed or expired',
+  })
+  @ApiResponse({ status: 404, description: 'Invitation not found' })
+  async acceptInvitation(@Param('token') token: string, @Req() req: any) {
+    return this.invitationsService.acceptInvitation(token, req.user.id);
   }
 
-  @Patch(':invitationId/resend')
-  resendInvitation(
-    @Param('orgId') orgId: string,
-    @Param('invitationId') invitationId: string,
-    @Req() req,
-  ) {
+  @Post('invitations/:id/resend')
+  @ApiOperation({ summary: 'Resend an invitation email' })
+  @ApiResponse({ status: 200, description: 'Invitation resent successfully' })
+  @ApiResponse({ status: 404, description: 'Invitation not found' })
+  async resendInvitation(@Param('id') invitationId: string, @Req() req: any) {
     return this.invitationsService.resendInvitation(invitationId, req.user.id);
   }
 
-  @Delete(':invitationId')
-  revokeInvitation(
-    @Param('orgId') orgId: string,
-    @Param('invitationId') invitationId: string,
-    @Req() req,
-  ) {
+  @Delete('invitations/:id/revoke')
+  @ApiOperation({ summary: 'Revoke an invitation' })
+  @ApiResponse({ status: 200, description: 'Invitation revoked successfully' })
+  @ApiResponse({ status: 404, description: 'Invitation not found' })
+  async revokeInvitation(@Param('id') invitationId: string, @Req() req: any) {
     return this.invitationsService.revokeInvitation(invitationId, req.user.id);
   }
-}
 
-// Separate controller for accepting invitations
-@Controller('invitations')
-@UseGuards(JwtAuthGuard)
-export class InvitationsAcceptController {
-  constructor(private readonly invitationsService: InvitationsService) {}
-
-  @Post(':token/accept')
-  acceptInvitation(@Param('token') token: string, @Req() req) {
-    return this.invitationsService.acceptInvitation(token, req.user.id);
+  @Get('organizations/:orgId/invitations')
+  @ApiOperation({ summary: 'Get all invitations for an organization' })
+  @ApiResponse({ status: 200, description: 'List of invitations' })
+  async getOrganizationInvitations(@Param('orgId') orgId: string) {
+    return this.invitationsService.getOrganizationInvitations(orgId);
   }
 }

@@ -1,55 +1,76 @@
-import { Controller } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { BrandKitService } from './brand-kit.service';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import {
+  CreateBrandKitDto,
+  UpdateBrandKitDto,
+} from './dtos/create-brand-kit.dto';
 
-import { Controller, Get, Post, Put, Delete, Body, Param } from '@nestjs/common';
-import { BrandKitService } from './brand-kit.service';
-import { CreateBrandKitDto, UpdateBrandKitDto } from './brand-kit.types';
-
+@ApiTags('Brand Kit')
 @Controller('brand-kit')
 export class BrandKitController {
   constructor(private readonly brandKitService: BrandKitService) {}
 
-  @Post()
-  async createBrandKit(
+  @Post(':organizationId')
+  @ApiOperation({ summary: 'Create a new brand kit' })
+  async create(
     @Param('organizationId') organizationId: string,
-    @Body() createDto: CreateBrandKitDto
+    @Body() dto: CreateBrandKitDto,
   ) {
-    return this.brandKitService.createBrandKit(organizationId, createDto);
+    return this.brandKitService.create(organizationId, dto);
   }
 
-  @Get()
-  async getBrandKit(@Param('organizationId') organizationId: string) {
-    return this.brandKitService.getBrandKit(organizationId);
-  }
-
-  @Put()
-  async updateBrandKit(
+  @Get(':organizationId')
+  @ApiOperation({ summary: 'Get all brand kits for an organization' })
+  async findByOrganization(
     @Param('organizationId') organizationId: string,
-    @Body() updateDto: UpdateBrandKitDto
+    @Query('includeInactive') includeInactive?: boolean,
   ) {
-    return this.brandKitService.updateBrandKit(organizationId, updateDto);
+    return this.brandKitService.findByOrganization(
+      organizationId,
+      includeInactive,
+    );
   }
 
-  @Delete()
-  async deleteBrandKit(@Param('organizationId') organizationId: string) {
-    return this.brandKitService.deleteBrandKit(organizationId);
+  @Get(':organizationId/active')
+  @ApiOperation({ summary: 'Get the active brand kit for an organization' })
+  async getActive(@Param('organizationId') organizationId: string) {
+    return this.brandKitService.getActiveBrandKit(organizationId);
   }
 
-  @Post('validate-content')
-  async validateContent(
+  @Patch(':organizationId/:id')
+  @ApiOperation({ summary: 'Update a brand kit' })
+  async update(
+    @Param('id') id: string,
     @Param('organizationId') organizationId: string,
-    @Body('content') content: string
+    @Body() dto: UpdateBrandKitDto,
   ) {
-    return this.brandKitService.validateContentAgainstBrand(organizationId, content);
+    return this.brandKitService.update(id, organizationId, dto);
   }
 
-  @Get('ai-format')
-  async getBrandKitForAI(@Param('organizationId') organizationId: string) {
-    return this.brandKitService.getBrandKitForAI(organizationId);
+  @Patch(':organizationId/:id/deactivate')
+  @ApiOperation({ summary: 'Deactivate a brand kit' })
+  async deactivate(
+    @Param('id') id: string,
+    @Param('organizationId') organizationId: string,
+  ) {
+    return this.brandKitService.deactivate(id, organizationId);
   }
 
-  @Get('usage')
-  async getBrandUsage(@Param('organizationId') organizationId: string) {
-    return this.brandKitService.getBrandUsage(organizationId);
+  @Patch(':organizationId/:id/activate')
+  @ApiOperation({ summary: 'Activate a brand kit' })
+  async activate(
+    @Param('id') id: string,
+    @Param('organizationId') organizationId: string,
+  ) {
+    return this.brandKitService.activate(id, organizationId);
   }
 }

@@ -1,4 +1,3 @@
-
 import {
   Controller,
   Post,
@@ -7,120 +6,73 @@ import {
   UploadedFile,
   UploadedFiles,
   UseInterceptors,
-  HttpCode,
-  HttpStatus,
-  BadRequestException,
+  Get,
+  Param,
+  Query,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiConsumes, ApiBody, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { MediaService } from './media.service';
-import { UploadFileDto, UploadMultipleFilesDto } from './dto/index.dto';
+import { SaveGeneratedMediaDto } from './dto/save-generated-media.dto';
+import { UploadFileDto } from './dto/upload-file.dto';
+import { UploadMultipleFilesDto } from './dto/upload-multiple-files.dto';
 
 @ApiTags('Media')
 @Controller('media')
 export class MediaController {
-  constructor(private readonly service: MediaService) {}
+  constructor(private readonly mediaService: MediaService) {}
 
-  /**
-   * Upload one file
-   */
-  @ApiOperation({ summary: 'Upload one file' })
-  @HttpCode(HttpStatus.OK)
+  @Post('upload')
+  @ApiOperation({ summary: 'Upload a single media file' })
   @ApiConsumes('multipart/form-data')
-  @ApiBody({ description: 'File upload', type: UploadFileDto })
-  @ApiResponse({
-    status: 200,
-    description: 'File uploaded successfully',
-    schema: {
-      example: {
-        id: 'clm9s4d85000p7y7w6g0xxyz',
-        url: 'https://res.cloudinary.com/demo/image/upload/sample.jpg',
-        publicId: 'rooli/sample',
-      },
-    },
-  })
-  @Post()
   @UseInterceptors(FileInterceptor('file'))
-  async uploadFile(@UploadedFile() file: Express.Multer.File) {
-    if (!file) throw new BadRequestException('No file uploaded');
-
-    // TODO: replace with real user/org IDs from auth context
-    const media = await this.service.uploadFile('userId', 'orgId', file);
-
-    return {
-      id: media.id,
-      url: media.url,
-      publicId: media.publicId,
-    };
+  async uploadFile(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadFileDto,
+  ) {
+    return this.mediaService.uploadFile(dto.userId, dto.organizationId, file);
   }
 
-  /**
-   * Upload multiple files
-   */
-  @ApiOperation({ summary: 'Upload multiple files' })
-  @HttpCode(HttpStatus.OK)
+  @Post('upload/multiple')
+  @ApiOperation({ summary: 'Upload multiple media files' })
   @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    description: 'Multiple files upload',
-    type: UploadMultipleFilesDto,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Files uploaded successfully',
-    schema: {
-      example: {
-        files: [
-          {
-            id: 'clm9s4d85000p7y7w6g0xabc',
-            url: 'https://res.cloudinary.com/demo/image/upload/file1.jpg',
-            publicId: 'rooli/file1',
-          },
-          {
-            id: 'clm9s4d85000p7y7w6g0xdef',
-            url: 'https://res.cloudinary.com/demo/image/upload/file2.jpg',
-            publicId: 'rooli/file2',
-          },
-        ],
-      },
-    },
-  })
-  @Post('multiple')
-  @UseInterceptors(FilesInterceptor('files', 8)) // up to 8 files
-  async uploadMultipleFiles(@UploadedFiles() files: Express.Multer.File[]) {
-    if (!files || files.length === 0) {
-      throw new BadRequestException('No files uploaded');
-    }
-
-    // TODO: replace with real user/org IDs from auth context
-    const mediaFiles = await this.service.uploadMultipleFiles(files, 'userId', 'orgId');
-
-    return {
-      files: mediaFiles.map((media) => ({
-        id: media.id,
-        url: media.url,
-        publicId: media.publicId,
-      })),
-    };
+  @UseInterceptors(FilesInterceptor('files'))
+  async uploadMultipleFiles(
+    @UploadedFiles() files: Express.Multer.File[],
+    @Body() dto: UploadMultipleFilesDto,
+  ) {
+    return this.mediaService.uploadMultipleFiles(
+      files,
+      dto.userId,
+      dto.organizationId,
+    );
   }
 
-  /**
-   * Delete a file
-   */
-  @ApiOperation({ summary: 'Delete a file from Cloudinary' })
-  @HttpCode(HttpStatus.OK)
-  @ApiResponse({
-    status: 200,
-    description: 'File deleted successfully',
-    schema: {
-      example: { message: 'File deleted successfully' },
-    },
-  })
-  @Delete()
-  async deleteFile(@Body('fileId') fileId: string) {
-    if (!fileId) throw new BadRequestException('fileId is required');
+  @Post('save-generated')
+  @ApiOperation({ summary: 'Save an already-uploaded AI-generated media' })
+  async saveGeneratedMedia(@Body() dto: SaveGeneratedMediaDto) {
+    return this.mediaService.saveGeneratedMedia(dto);
+  }
 
-    await this.service.deleteFile(fileId);
+  @Get('ai-generated')
+  @ApiOperation({ summary: 'Get paginated AI-generated media' })
+  async getAIGeneratedMedia(
+    @Query('organizationId') organizationId: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.mediaService.getAIGeneratedMedia(organizationId, page, limit);
+  }
 
-    return { message: 'File deleted successfully' };
+  @Delete(':fileId')
+  @ApiOperation({ summary: 'Delete a media file' })
+  async deleteFile(@Param('fileId') fileId: string) {
+    return this.mediaService.deleteFile(fileId);
+  }
+
+  @Get(':fileId')
+  @ApiOperation({ summary: 'Get a media file by ID' })
+  async getFileById(@Param('fileId') fileId: string) {
+    return this.mediaService.getFileById(fileId);
   }
 }

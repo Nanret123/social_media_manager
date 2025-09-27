@@ -2,7 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { PostStatus } from '@prisma/client';
 import { IsString, IsOptional, IsArray, IsDateString } from 'class-validator';
 
-export class UpdatePost {
+export class UpdatePostDto {
   @ApiPropertyOptional({
     description: 'Updated post content',
     example: 'We’ve just rolled out new updates for our platform!',

@@ -1,20 +1,10 @@
 // src/analytics/services/export.service.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
-import { Platform } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
-
-export type ExportFormat = 'excel' | 'pdf' | 'csv';
-
-interface ExportOptions {
-  format: ExportFormat;
-  organizationId: string;
-  startDate?: Date;
-  endDate?: Date;
-  platform?: Platform;
-}
+import { ExportFormat, ExportOptionsDto } from '../dtos/export-options.dto';
 
 @Injectable()
 export class ExportService {
@@ -26,59 +16,62 @@ export class ExportService {
   ) {}
 
   /**
-   * Generate analytics report
+   * Generate analytics report in Excel, PDF, or CSV
+   * @param options Export options including orgId, format, date range, and platform
    */
-  async generateReport(options: ExportOptions): Promise<Buffer> {
+  async generateReport(options: ExportOptionsDto): Promise<Buffer> {
     switch (options.format) {
-      case 'excel':
+      case ExportFormat.EXCEL:
         return this.generateExcelReport(options);
-      case 'pdf':
+      case ExportFormat.PDF:
         return this.generatePdfReport(options);
-      case 'csv':
+      case ExportFormat.CSV:
         return this.generateCsvReport(options);
       default:
         throw new Error(`Unsupported format: ${options.format}`);
     }
   }
 
-  private async generateExcelReport(options: ExportOptions): Promise<Buffer> {
+  private async generateExcelReport(
+    options: ExportOptionsDto,
+  ): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Analytics Report');
 
-    // Add data
     const data = await this.getExportData(options);
     worksheet.addRows(data);
 
-    // Style header row
     worksheet.getRow(1).font = { bold: true };
 
     const arrayBuffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(arrayBuffer);
   }
 
-  private async generatePdfReport(options: ExportOptions): Promise<Buffer> {
+  private async generatePdfReport(options: ExportOptionsDto): Promise<Buffer> {
+    const data = await this.getExportData(options); // fetch first
+
     return new Promise((resolve) => {
       const doc = new PDFDocument();
-      const buffers: any[] = [];
+      const buffers: Uint8Array[] = [];
 
       doc.on('data', buffers.push.bind(buffers));
       doc.on('end', () => resolve(Buffer.concat(buffers)));
 
-      // Add content to PDF
-      doc.fontSize(20).text('Analytics Report', 100, 100);
-      // Add more content...
+      doc.fontSize(20).text('Analytics Report', { align: 'center' });
+      doc.moveDown();
+
+      data.forEach((row) => doc.text(row.join(': ')));
 
       doc.end();
     });
   }
-
-  private async generateCsvReport(options: ExportOptions): Promise<Buffer> {
+  private async generateCsvReport(options: ExportOptionsDto): Promise<Buffer> {
     const data = await this.getExportData(options);
     const csv = data.map((row) => row.join(',')).join('\n');
     return Buffer.from(csv);
   }
 
-  private async getExportData(options: ExportOptions): Promise<any[][]> {
+  private async getExportData(options: ExportOptionsDto): Promise<any[][]> {
     const summary = await this.analyticsService.getOrganizationSummary(
       options.organizationId,
       {

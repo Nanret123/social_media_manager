@@ -1,108 +1,166 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+} from '@nestjs/common';
+import {
+  Platform,
+  ContentType,
+  TemplateCategory,
+  TemplateStatus,
+  Prisma,
+} from '@prisma/client';
+import { AiContentService } from 'src/ai/services/ai-content.service';
+import { BrandKitService } from 'src/brand-kit/brand-kit.service';
+import { PrismaService } from 'src/prisma/prisma.service';
 
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../shared/database/prisma.service';
-import { 
-  CreateTemplateDto, 
-  UpdateTemplateDto, 
-  TemplateSearchFilters,
-  RenderTemplateOptions,
-  TemplateRenderResult,
-  TemplateCategory 
-} from './template.types';
-import { TemplateEngine } from './template-engine';
+export interface TemplateContent {
+  version: number;
+  structure: {
+    caption: string;
+    hashtags?: string[];
+    cta?: string;
+    variables: Record<
+      string,
+      {
+        type: 'string' | 'number' | 'boolean' | 'date' | 'url';
+        required: boolean;
+        defaultValue?: any;
+        description?: string;
+        validation?: {
+          minLength?: number;
+          maxLength?: number;
+          pattern?: string;
+          options?: string[];
+        };
+      }
+    >;
+  };
+  metadata: {
+    idealLength: number;
+    tone: string;
+    emojiRecommendations?: string[];
+    platformSpecific?: Record<string, any>;
+  };
+}
+
+interface CreateTemplateDto {
+  name: string;
+  description?: string;
+  platform: Platform;
+  contentType: ContentType;
+  category: TemplateCategory;
+  tags?: string[];
+  content: TemplateContent;
+  isPublic?: boolean;
+  brandKitId?: string;
+}
+
+interface UpdateTemplateDto {
+  name?: string;
+  description?: string;
+  category?: TemplateCategory;
+  tags?: string[];
+  content?: TemplateContent;
+  isPublic?: boolean;
+  status?: TemplateStatus;
+  brandKitId?: string;
+}
+
+interface GenerateFromTemplateDto {
+  templateId: string;
+  variables: Record<string, any>;
+  options?: {
+    enhanceWithAI?: boolean;
+    tone?: string;
+    platform?: Platform;
+    includeHashtags?: boolean;
+    includeCTA?: boolean;
+  };
+}
+
+interface TemplateVariable {
+  required?: boolean;
+  validation?: {
+    regex?: string;
+    minLength?: number;
+    maxLength?: number;
+  };
+}
 
 @Injectable()
-export class TemplateService {
-  private readonly logger = new Logger(TemplateService.name);
+export class ContentTemplatesService {
+  private readonly logger = new Logger(ContentTemplatesService.name);
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly templateEngine: TemplateEngine,
+    private readonly aiService: AiContentService,
+    private readonly brandKitService: BrandKitService,
   ) {}
 
-  async createTemplate(createDto: CreateTemplateDto, userId: string, organizationId?: string) {
-    const template = await this.prisma.contentTemplate.create({
+  async createTemplate(
+    organizationId: string,
+    userId: string,
+    dto: CreateTemplateDto,
+  ) {
+    // Validate template content structure
+    this.validateTemplateContent(dto.content);
+
+    // Verify brand kit belongs to organization if provided
+    if (dto.brandKitId) {
+      await this.verifyBrandKitAccess(organizationId, dto.brandKitId);
+    }
+
+    return this.prisma.contentTemplate.create({
       data: {
-        ...createDto,
+        organizationId: organizationId || null, // null for system templates
         userId,
-        organizationId,
-        content: createDto.content as any, // JSON conversion handled by Prisma
+        name: dto.name,
+        description: dto.description,
+        platform: dto.platform,
+        contentType: dto.contentType,
+        category: dto.category,
+        tags: dto.tags || [],
+        content: dto.content as unknown as Prisma.InputJsonValue,
+        variables: this.extractVariableDefinitions(
+          dto.content,
+        ) as unknown as Prisma.InputJsonValue,
+        isPublic: dto.isPublic || false,
+        brandKitId: dto.brandKitId,
+        status: 'DRAFT',
+      },
+      include: {
+        user: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        brandKit: { select: { id: true, name: true } },
       },
     });
-
-    this.logger.log(`Template created: ${template.name} by user ${userId}`);
-    return template;
   }
 
-  async findTemplates(filters: TemplateSearchFilters, organizationId?: string) {
-    const where: any = {};
+  async getTemplateById(id: string, organizationId?: string) {
+    const where: any = { id };
 
-    if (organizationId !== undefined) {
+    if (organizationId) {
       where.OR = [
-        { organizationId }, // Organization templates
-        { isPublic: true }, // Public templates
-        { organizationId: null } // System templates
-      ];
-    } else {
-      where.isPublic = true;
-    }
-
-    if (filters.category) {
-      where.category = filters.category;
-    }
-
-    if (filters.platform) {
-      where.platform = filters.platform;
-    }
-
-    if (filters.tags && filters.tags.length > 0) {
-      where.tags = { hasSome: filters.tags };
-    }
-
-    if (filters.status) {
-      where.status = filters.status;
-    }
-
-    if (filters.search) {
-      where.OR = [
-        { name: { contains: filters.search, mode: 'insensitive' } },
-        { description: { contains: filters.search, mode: 'insensitive' } },
-        { tags: { has: filters.search } },
+        { organizationId },
+        { isPublic: true, organizationId: null }, // System templates
       ];
     }
 
-    const templates = await this.prisma.contentTemplate.findMany({
+    const template = await this.prisma.contentTemplate.findFirst({
       where,
       include: {
         user: {
-          select: { name: true, email: true }
+          select: { id: true, firstName: true, lastName: true, email: true },
         },
-        organization: {
-          select: { name: true }
-        }
+        brandKit: { select: { id: true, name: true } },
+        _count: {
+          select: { favorites: true },
+        },
       },
-      orderBy: { usageCount: 'desc' },
-    });
-
-    return templates;
-  }
-
-  async findTemplateById(id: string, organizationId?: string) {
-    const template = await this.prisma.contentTemplate.findFirst({
-      where: {
-        id,
-        OR: [
-          { organizationId },
-          { isPublic: true },
-          { organizationId: null }
-        ]
-      },
-      include: {
-        user: {
-          select: { name: true, email: true }
-        }
-      }
     });
 
     if (!template) {
@@ -112,124 +170,542 @@ export class TemplateService {
     return template;
   }
 
-  async updateTemplate(id: string, updateDto: UpdateTemplateDto, userId: string) {
-    const template = await this.prisma.contentTemplate.findFirst({
-      where: { id, userId } // Users can only update their own templates
-    });
+  async getOrganizationTemplates(
+    organizationId: string,
+    filters: {
+      platform?: Platform;
+      contentType?: ContentType;
+      category?: TemplateCategory;
+      status?: TemplateStatus;
+      search?: string;
+      page?: number;
+      limit?: number;
+    },
+  ) {
+    const where: any = {
+      organizationId,
+      status: { not: 'DELETED' },
+    };
 
-    if (!template) {
-      throw new NotFoundException('Template not found or access denied');
+    if (filters.platform) where.platform = filters.platform;
+    if (filters.contentType) where.contentType = filters.contentType;
+    if (filters.category) where.category = filters.category;
+    if (filters.status) where.status = filters.status;
+
+    if (filters.search) {
+      where.OR = [
+        { name: { contains: filters.search, mode: 'insensitive' } },
+        { description: { contains: filters.search, mode: 'insensitive' } },
+        { tags: { hasSome: [filters.search] } },
+      ];
     }
 
-    const updated = await this.prisma.contentTemplate.update({
+    const [templates, total] = await Promise.all([
+      this.prisma.contentTemplate.findMany({
+        where,
+        include: {
+          user: { select: { firstName: true, lastName: true } },
+          brandKit: { select: { name: true } },
+          _count: {
+            select: { favorites: true },
+          },
+        },
+        orderBy: [
+          { favoriteCount: 'desc' },
+          { usageCount: 'desc' },
+          { updatedAt: 'desc' },
+        ],
+        skip: (filters.page - 1) * (filters.limit || 20),
+        take: filters.limit || 20,
+      }),
+      this.prisma.contentTemplate.count({ where }),
+    ]);
+
+    return {
+      templates,
+      pagination: {
+        page: filters.page,
+        limit: filters.limit,
+        total,
+        pages: Math.ceil(total / (filters.limit || 20)),
+      },
+    };
+  }
+
+  async getSystemTemplates(filters: {
+    platform?: Platform;
+    category?: TemplateCategory;
+    featured?: boolean;
+  }) {
+    const where: any = {
+      organizationId: null,
+      isPublic: true,
+      status: 'ACTIVE',
+    };
+
+    if (filters.platform) where.platform = filters.platform;
+    if (filters.category) where.category = filters.category;
+    if (filters.featured) where.favoriteCount = { gt: 10 }; // Popular templates
+
+    return this.prisma.contentTemplate.findMany({
+      where,
+      include: {
+        user: { select: { firstName: true, lastName: true } },
+        _count: {
+          select: { favorites: true },
+        },
+      },
+      orderBy: [{ favoriteCount: 'desc' }, { usageCount: 'desc' }],
+      take: 50,
+    });
+  }
+
+  async updateTemplate(
+    id: string,
+    organizationId: string,
+    dto: UpdateTemplateDto,
+  ) {
+    const template = await this.getTemplateById(id, organizationId);
+
+    if (!template) {
+      throw new NotFoundException('Template not found');
+    }
+
+    // Validate content if provided
+    if (dto.content) {
+      this.validateTemplateContent(dto.content);
+    }
+
+    // Verify brand kit access if changing
+    if (dto.brandKitId && dto.brandKitId !== template.brandKitId) {
+      await this.verifyBrandKitAccess(organizationId, dto.brandKitId);
+    }
+
+    const updateData: any = { ...dto };
+
+    // Update example if content changed
+    if (dto.content) {
+      updateData.example = this.generateExample(dto.content);
+      updateData.variables = this.extractVariableDefinitions(dto.content);
+      updateData.version = template.version + 1;
+    }
+
+    return this.prisma.contentTemplate.update({
       where: { id },
       data: {
-        ...updateDto,
-        content: updateDto.content as any,
+        ...updateData,
+        updatedAt: new Date(),
+      },
+      include: {
+        user: { select: { firstName: true, lastName: true } },
+        brandKit: { select: { name: true } },
       },
     });
-
-    this.logger.log(`Template updated: ${id} by user ${userId}`);
-    return updated;
   }
 
-  async deleteTemplate(id: string, userId: string) {
-    const template = await this.prisma.contentTemplate.findFirst({
-      where: { id, userId }
-    });
+  async deleteTemplate(id: string, organizationId: string) {
+    const template = await this.getTemplateById(id, organizationId);
 
     if (!template) {
-      throw new NotFoundException('Template not found or access denied');
+      throw new NotFoundException('Template not found');
     }
 
-    await this.prisma.contentTemplate.delete({
+    // Soft delete
+    return this.prisma.contentTemplate.update({
       where: { id },
+      data: { status: 'DELETED' },
     });
-
-    this.logger.log(`Template deleted: ${id} by user ${userId}`);
-    return { success: true };
   }
 
-  async renderTemplate(
-    templateId: string, 
-    options: RenderTemplateOptions,
-    organizationId?: string
-  ): Promise<TemplateRenderResult> {
-    const template = await this.findTemplateById(templateId, organizationId);
-    const result = await this.templateEngine.renderTemplate(
-      template.content as any,
-      options
+  async generateFromTemplate(
+    dto: GenerateFromTemplateDto,
+    organizationId: string,
+    userId: string
+  ) {
+    const template = await this.getTemplateById(dto.templateId, organizationId);
+
+    if (template.status !== 'ACTIVE') {
+      throw new BadRequestException('Template is not active');
+    }
+
+    // Safely cast JSON to your type
+    const templateContent = template.content as unknown as TemplateContent;
+
+    // Validate variables
+    this.validateTemplateVariables(templateContent, dto.variables);
+
+    // Fill template with variables
+    let content = this.fillTemplate(
+      templateContent,
+      dto.variables,
+      dto.options,
     );
 
-    if (result.isValid) {
-      // Increment usage count
-      await this.prisma.contentTemplate.update({
-        where: { id: templateId },
+    // Enhance with AI if requested
+    if (dto.options?.enhanceWithAI && organizationId) {
+      content = await this.enhanceContentWithAI(
+        content,
+        userId,
+        template,
+        organizationId,
+        dto.options,
+      );
+    }
+
+    // Update usage stats
+    await this.incrementTemplateUsage(template.id);
+
+    return {
+      content,
+      template: {
+        id: template.id,
+        name: template.name,
+        platform: template.platform,
+      },
+      variables: dto.variables,
+      metadata: {
+        length: content.length,
+        idealLength: templateContent.metadata.idealLength,
+        variableCount: Object.keys(dto.variables).length,
+      },
+    };
+  }
+
+  async favoriteTemplate(templateId: string, userId: string) {
+    const template = await this.getTemplateById(templateId);
+
+    try {
+      await this.prisma.userFavoriteTemplate.create({
         data: {
-          usageCount: { increment: 1 },
-          lastUsedAt: new Date(),
+          userId,
+          templateId,
         },
       });
+
+      // Update favorite count
+      await this.prisma.contentTemplate.update({
+        where: { id: templateId },
+        data: { favoriteCount: { increment: 1 } },
+      });
+
+      return { success: true, message: 'Template added to favorites' };
+    } catch (error) {
+      if (error.code === 'P2002') {
+        // Unique constraint violation
+        throw new ConflictException('Template already in favorites');
+      }
+      throw error;
+    }
+  }
+
+  async unfavoriteTemplate(templateId: string, userId: string) {
+    const result = await this.prisma.userFavoriteTemplate.deleteMany({
+      where: { userId, templateId },
+    });
+
+    if (result.count > 0) {
+      await this.prisma.contentTemplate.update({
+        where: { id: templateId },
+        data: { favoriteCount: { decrement: 1 } },
+      });
+    }
+
+    return { success: true, message: 'Template removed from favorites' };
+  }
+
+  async getUserFavorites(userId: string, organizationId?: string) {
+    const where: any = {
+      favorites: { some: { userId } },
+      status: 'ACTIVE',
+    };
+
+    if (organizationId) {
+      where.OR = [{ organizationId }, { isPublic: true, organizationId: null }];
+    }
+
+    return this.prisma.contentTemplate.findMany({
+      where,
+      include: {
+        user: { select: { firstName: true, lastName: true } },
+        brandKit: { select: { name: true } },
+        _count: {
+          select: { favorites: true },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async duplicateTemplate(
+    templateId: string,
+    userId: string,
+    organizationId: string,
+    newName?: string,
+  ) {
+    const template = await this.getTemplateById(templateId, organizationId);
+
+    return this.createTemplate(organizationId, userId, {
+      name: newName || `${template.name} (Copy)`,
+      description: template.description,
+      platform: template.platform,
+      contentType: template.contentType,
+      category: template.category,
+      tags: template.tags,
+      content: template.content as unknown as TemplateContent,
+      isPublic: false, // Duplicates are private by default
+      brandKitId: template.brandKitId,
+    });
+  }
+
+  async getTemplateAnalytics(templateId: string, organizationId: string) {
+    const template = await this.getTemplateById(templateId, organizationId);
+
+    const usageStats = await this.prisma.aiContentGeneration.groupBy({
+      by: ['createdAt'],
+      where: {
+        organizationId,
+        metadata: {
+          path: ['templateId'],
+          equals: templateId,
+        },
+      } as any, // 👈 fix circular type issue
+      _count: { id: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return {
+      template: {
+        id: template.id,
+        name: template.name,
+        usageCount: template.usageCount,
+        favoriteCount: template.favoriteCount,
+      },
+      usageStats: usageStats.map((stat) => ({
+        date: stat.createdAt,
+        count: stat._count.id,
+      })),
+      popularity: this.calculatePopularityScore(template),
+    };
+  }
+
+  private validateTemplateContent(content: TemplateContent) {
+    if (!content.structure || !content.structure.caption) {
+      throw new BadRequestException('Template must have a caption structure');
+    }
+
+    if (!content.metadata || !content.metadata.tone) {
+      throw new BadRequestException('Template must have tone metadata');
+    }
+
+    // Validate variable definitions
+    if (content.structure.variables) {
+      for (const [key, variable] of Object.entries(
+        content.structure.variables,
+      )) {
+        if (variable.required && variable.defaultValue === undefined) {
+          throw new BadRequestException(
+            `Required variable ${key} must have a default value`,
+          );
+        }
+      }
+    }
+  }
+
+  private validateTemplateVariables(
+    templateContent: TemplateContent,
+    variables: Record<string, any>,
+  ) {
+    const definedVariables = templateContent.structure.variables || {};
+
+    for (const [key, variable] of Object.entries(definedVariables)) {
+      const v = variable as TemplateVariable; // 👈 cast so TS knows shape
+
+      if (v.required && !variables[key]) {
+        throw new BadRequestException(`Required variable '${key}' is missing`);
+      }
+
+      if (variables[key] && v.validation) {
+        this.validateVariableValue(key, variables[key], v);
+      }
+    }
+  }
+
+  private validateVariableValue(key: string, value: any, variable: any) {
+    if (variable.validation) {
+      if (
+        variable.validation.minLength &&
+        value.length < variable.validation.minLength
+      ) {
+        throw new BadRequestException(
+          `Variable '${key}' must be at least ${variable.validation.minLength} characters`,
+        );
+      }
+
+      if (
+        variable.validation.maxLength &&
+        value.length > variable.validation.maxLength
+      ) {
+        throw new BadRequestException(
+          `Variable '${key}' must be at most ${variable.validation.maxLength} characters`,
+        );
+      }
+
+      if (
+        variable.validation.pattern &&
+        !new RegExp(variable.validation.pattern).test(value)
+      ) {
+        throw new BadRequestException(
+          `Variable '${key}' does not match required pattern`,
+        );
+      }
+
+      if (
+        variable.validation.options &&
+        !variable.validation.options.includes(value)
+      ) {
+        throw new BadRequestException(
+          `Variable '${key}' must be one of: ${variable.validation.options.join(', ')}`,
+        );
+      }
+    }
+  }
+
+  private fillTemplate(
+    content: TemplateContent,
+    variables: Record<string, any>,
+    options?: any,
+  ): string {
+    let result = content.structure.caption;
+
+    // Replace variables in caption
+    for (const [key, value] of Object.entries(variables)) {
+      const placeholder = new RegExp(`{${key}}`, 'g');
+      result = result.replace(placeholder, value || '');
+    }
+
+    // Add hashtags if enabled and they exist
+    if (options?.includeHashtags !== false && content.structure.hashtags) {
+      const filledHashtags = content.structure.hashtags.map((tag) => {
+        for (const [key, value] of Object.entries(variables)) {
+          tag = tag.replace(new RegExp(`{${key}}`, 'g'), value || '');
+        }
+        return tag;
+      });
+      result += `\n\n${filledHashtags.join(' ')}`;
+    }
+
+    // Add CTA if enabled and it exists
+    if (options?.includeCTA !== false && content.structure.cta) {
+      let cta = content.structure.cta;
+      for (const [key, value] of Object.entries(variables)) {
+        cta = cta.replace(new RegExp(`{${key}}`, 'g'), value || '');
+      }
+      result += `\n\n${cta}`;
     }
 
     return result;
   }
 
-  async duplicateTemplate(templateId: string, userId: string, organizationId?: string) {
-    const template = await this.findTemplateById(templateId, organizationId);
-    
-    const duplicated = await this.prisma.contentTemplate.create({
-      data: {
-        name: `${template.name} (Copy)`,
-        description: template.description,
-        category: template.category as TemplateCategory,
+  private async enhanceContentWithAI(
+    content: string,
+    userId: string,
+    template: any,
+    organizationId: string,
+    options: any,
+  ): Promise<string> {
+    try {
+      const brandKit =
+        await this.brandKitService.getActiveBrandKit(organizationId);
+
+      const enhanced = await this.aiService.enhanceContent(content, {
         platform: template.platform,
-        content: template.content,
-        tags: template.tags,
-        isPublic: false, // Duplicates are always private
-        status: 'draft',
+        tone: options.tone || template.content.metadata.tone,
+        brandKit,
+        style: 'template_enhancement',
+         organizationId,
         userId,
-        organizationId,
+      });
+
+      return enhanced.content;
+    } catch (error) {
+      this.logger.warn(
+        'AI enhancement failed, returning original content',
+        error,
+      );
+      return content;
+    }
+  }
+
+  private generateExample(content: TemplateContent): string {
+    const exampleVariables: Record<string, any> = {};
+
+    if (content.structure.variables) {
+      for (const [key, variable] of Object.entries(
+        content.structure.variables,
+      )) {
+        exampleVariables[key] =
+          variable.defaultValue || this.getDefaultExampleValue(variable.type);
+      }
+    }
+
+    return this.fillTemplate(content, exampleVariables, {
+      includeHashtags: true,
+      includeCTA: true,
+    });
+  }
+
+  private getDefaultExampleValue(type: string): any {
+    const examples = {
+      string: 'Example Value',
+      number: '42',
+      boolean: 'true',
+      date: '2024-01-01',
+      url: 'https://example.com',
+    };
+    return examples[type] || 'Example';
+  }
+
+  private extractVariableDefinitions(content: TemplateContent): any {
+    return content.structure.variables || {};
+  }
+
+  private async incrementTemplateUsage(templateId: string) {
+    await this.prisma.contentTemplate.update({
+      where: { id: templateId },
+      data: {
+        usageCount: { increment: 1 },
+        lastUsedAt: new Date(),
       },
     });
-
-    this.logger.log(`Template duplicated: ${templateId} -> ${duplicated.id} by user ${userId}`);
-    return duplicated;
   }
 
-  async getTemplateCategories(): Promise<TemplateCategory[]> {
-    return Object.values(TemplateCategory);
+  private async verifyBrandKitAccess(
+    organizationId: string,
+    brandKitId: string,
+  ) {
+    const brandKit = await this.brandKitService.getById(brandKitId);
+    if (!brandKit || brandKit.organizationId !== organizationId) {
+      throw new BadRequestException('Brand kit not found or access denied');
+    }
   }
 
-  async getPopularTags(limit: number = 20): Promise<string[]> {
-    const templates = await this.prisma.contentTemplate.findMany({
-      where: { isPublic: true, status: 'published' },
-      select: { tags: true },
-    });
+  private calculatePopularityScore(template: any): number {
+    // Simple popularity score based on usage and favorites
+    const usageWeight = 1;
+    const favoriteWeight = 2;
+    const recencyWeight = 0.5;
 
-    const tagCounts = new Map<string, number>();
-    templates.forEach(template => {
-      template.tags.forEach(tag => {
-        tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
-      });
-    });
+    const daysSinceLastUse = template.lastUsedAt
+      ? (new Date().getTime() - template.lastUsedAt.getTime()) /
+        (1000 * 3600 * 24)
+      : 30;
 
-    return Array.from(tagCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([tag]) => tag);
-  }
+    const recencyScore = Math.max(0, 1 - daysSinceLastUse / 30); // Decay over 30 days
 
-  async getTemplateStats(organizationId?: string) {
-    const where = organizationId ? { organizationId } : { isPublic: true };
-
-    const stats = await this.prisma.contentTemplate.groupBy({
-      by: ['platform', 'category'],
-      where,
-      _count: { id: true },
-      _avg: { usageCount: true },
-    });
-
-    return stats;
+    return (
+      template.usageCount * usageWeight +
+      template.favoriteCount * favoriteWeight +
+      recencyScore * recencyWeight
+    );
   }
 }

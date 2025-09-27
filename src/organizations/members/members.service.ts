@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { UpdateMemberDto } from '../invitations/dtos/update-member.dto';
+import { UpdateMemberDto } from './dtos/update-member.dto';
 
 @Injectable()
 export class MembersService {
@@ -14,7 +14,7 @@ export class MembersService {
   async getOrganizationMembers(orgId: string, userId: string) {
     await this.verifyMembership(orgId, userId);
 
-    return this.prisma.organizationMember.findMany({
+    const members = await this.prisma.organizationMember.findMany({
       where: {
         organizationId: orgId,
         isActive: true,
@@ -30,16 +30,11 @@ export class MembersService {
             lastActiveAt: true,
           },
         },
-        inviter: {
-          select: {
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
-        },
       },
       orderBy: { joinedAt: 'desc' },
     });
+
+    return members.map((m) => this.toSafeMember(m));
   }
 
   async updateMember(
@@ -48,96 +43,92 @@ export class MembersService {
     updaterId: string,
     dto: UpdateMemberDto,
   ) {
-    await this.verifyAdminAccess(orgId, updaterId);
+    const updaterMembership = await this.getMembership(orgId, updaterId);
+    if (!updaterMembership || !this.isAdminOrOwner(updaterMembership)) {
+      throw new ForbiddenException('Insufficient permissions');
+    }
 
-    const targetMember = await this.prisma.organizationMember.findFirst({
-      where: { id: memberId, organizationId: orgId, isActive: true },
-    });
-
+    const targetMember = await this.getMembership(orgId, undefined, memberId);
     if (!targetMember) {
       throw new NotFoundException('Member not found');
     }
 
-    // Prevent modifying owners
-    if (targetMember.role === 'OWNER') {
+    if (this.isOwner(targetMember)) {
       throw new ForbiddenException('Cannot modify organization owner');
     }
 
-    // Prevent non-owners from assigning OWNER role
-    if (dto.role === 'OWNER') {
-      const updaterMembership = await this.getMembership(orgId, updaterId);
-      if (updaterMembership.role !== 'OWNER') {
-        throw new ForbiddenException('Only owners can assign owner role');
-      }
+    if (dto.roleId && !this.isOwner(updaterMembership)) {
+      throw new ForbiddenException('Only owners can assign owner role');
     }
 
-    return this.prisma.organizationMember.update({
+    const updated = await this.prisma.organizationMember.update({
       where: { id: memberId },
       data: {
-        role: dto.role,
+        roleId: dto.roleId,
         isActive: dto.isActive,
         permissions: dto.permissions,
       },
+      include: { user: true },
     });
+
+    await this.logAuditEvent(orgId, updaterId, 'member_updated', {
+      updatedMemberId: memberId,
+      updates: dto,
+    });
+
+    return this.toSafeMember(updated);
   }
 
   async removeMember(orgId: string, memberId: string, removerId: string) {
-    await this.verifyAdminAccess(orgId, removerId);
+    const removerMembership = await this.getMembership(orgId, removerId);
+    if (!removerMembership || !this.isAdminOrOwner(removerMembership)) {
+      throw new ForbiddenException('Insufficient permissions');
+    }
 
-    const targetMember = await this.prisma.organizationMember.findFirst({
-      where: { id: memberId, organizationId: orgId, isActive: true },
-    });
-
+    const targetMember = await this.getMembership(orgId, undefined, memberId);
     if (!targetMember) {
       throw new NotFoundException('Member not found');
     }
 
-    // Prevent removing yourself
     if (targetMember.userId === removerId) {
       throw new ConflictException('Cannot remove yourself from organization');
     }
 
-    // Prevent removing owners
-    if (targetMember.role === 'OWNER') {
+    if (this.isOwner(targetMember)) {
       throw new ForbiddenException('Cannot remove organization owner');
     }
 
-    // Soft delete the member
     const updatedMember = await this.prisma.organizationMember.update({
       where: { id: memberId },
       data: { isActive: false },
+      include: { user: true },
     });
 
-    // Log to audit trail
     await this.logAuditEvent(orgId, removerId, 'member_removed', {
       removedMemberId: memberId,
-      removedMemberEmail: targetMember.userId, // You'd need to join user table for email
+      removedMemberEmail: updatedMember.user?.email,
     });
 
-    return updatedMember;
+    return this.toSafeMember(updatedMember);
   }
 
   async leaveOrganization(orgId: string, userId: string) {
     const membership = await this.getMembership(orgId, userId);
-
     if (!membership) {
       throw new NotFoundException('Membership not found');
     }
 
-    // Prevent owner from leaving (they should transfer ownership first)
-    if (membership.role === 'OWNER') {
+    if (this.isOwner(membership)) {
       throw new ForbiddenException(
         'Organization owner cannot leave. Transfer ownership first.',
       );
     }
 
-    // Soft delete the membership
     await this.prisma.organizationMember.update({
       where: { id: membership.id },
       data: { isActive: false },
     });
 
-    // Log to audit trail
     await this.logAuditEvent(orgId, userId, 'member_left', {
       memberId: membership.id,
     });
@@ -154,34 +145,41 @@ export class MembersService {
       orgId,
       currentOwnerId,
     );
-    if (currentOwnerMembership.role !== 'OWNER') {
+    if (!currentOwnerMembership || !this.isOwner(currentOwnerMembership)) {
       throw new ForbiddenException(
         'Only organization owners can transfer ownership',
       );
     }
 
-    const newOwnerMembership = await this.prisma.organizationMember.findFirst({
-      where: { id: newOwnerMemberId, organizationId: orgId, isActive: true },
-    });
-
+    const newOwnerMembership = await this.getMembership(
+      orgId,
+      undefined,
+      newOwnerMemberId,
+    );
     if (!newOwnerMembership) {
       throw new NotFoundException('New owner membership not found');
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // Demote current owner to ADMIN
+      const [adminRole, ownerRole] = await Promise.all([
+        tx.role.findUnique({ where: { name: 'ADMIN' } }),
+        tx.role.findUnique({ where: { name: 'OWNER' } }),
+      ]);
+
+      if (!adminRole || !ownerRole) {
+        throw new Error('Role definitions missing');
+      }
+
       await tx.organizationMember.update({
         where: { id: currentOwnerMembership.id },
-        data: { role: 'ADMIN' },
+        data: { roleId: adminRole.id },
       });
 
-      // Promote new member to OWNER
       await tx.organizationMember.update({
         where: { id: newOwnerMembership.id },
-        data: { role: 'OWNER' },
+        data: { roleId: ownerRole.id },
       });
 
-      // Log to audit trail
       await this.logAuditEvent(orgId, currentOwnerId, 'ownership_transferred', {
         fromMemberId: currentOwnerMembership.id,
         toMemberId: newOwnerMembership.id,
@@ -189,14 +187,30 @@ export class MembersService {
     });
   }
 
-  private async verifyAdminAccess(orgId: string, userId: string) {
-    const membership = await this.getMembership(orgId, userId);
-    if (
-      !membership ||
-      (membership.role !== 'OWNER' && membership.role !== 'ADMIN')
-    ) {
-      throw new ForbiddenException('Insufficient permissions');
-    }
+  // --- Helpers ---
+
+  private async getMembership(
+    orgId: string,
+    userId?: string,
+    memberId?: string,
+  ) {
+    return this.prisma.organizationMember.findFirst({
+      where: {
+        organizationId: orgId,
+        isActive: true,
+        ...(userId && { userId }),
+        ...(memberId && { id: memberId }),
+      },
+      include: { user: true, role: true },
+    });
+  }
+
+  private isOwner(member: { role: { name: string } }) {
+    return member.role?.name === 'OWNER';
+  }
+
+  private isAdminOrOwner(member: { role: { name: string } }) {
+    return member.role?.name === 'ADMIN' || member.role?.name === 'OWNER';
   }
 
   private async verifyMembership(orgId: string, userId: string) {
@@ -204,16 +218,6 @@ export class MembersService {
     if (!membership) {
       throw new ForbiddenException('Organization access denied');
     }
-  }
-
-  private async getMembership(orgId: string, userId: string) {
-    return this.prisma.organizationMember.findFirst({
-      where: {
-        organizationId: orgId,
-        userId: userId,
-        isActive: true,
-      },
-    });
   }
 
   private async logAuditEvent(
@@ -231,5 +235,23 @@ export class MembersService {
         details: details,
       },
     });
+  }
+
+  private toSafeMember(member: any) {
+    return {
+      id: member.id,
+      role: member.role,
+      isActive: member.isActive,
+      permissions: member.permissions,
+      joinedAt: member.joinedAt,
+      lastActiveAt: member.lastActiveAt,
+      user: member.user && {
+        id: member.user.id,
+        email: member.user.email,
+        firstName: member.user.firstName,
+        lastName: member.user.lastName,
+        avatar: member.user.avatar,
+      },
+    };
   }
 }

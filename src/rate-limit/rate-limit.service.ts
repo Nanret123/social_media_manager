@@ -106,7 +106,7 @@ private getLimitConfig(platform: Platform, action: string): RateLimitConfig {
   }
 
   // Fallback to general default
-  return PLATFORM_RATE_LIMITS.general.default;
+  return PLATFORM_RATE_LIMITS.GENERAL.default;
 }
 
   async getQuota(

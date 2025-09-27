@@ -5,5 +5,6 @@ import { BrandKitController } from './brand-kit.controller';
 @Module({
   controllers: [BrandKitController],
   providers: [BrandKitService],
+  exports: [BrandKitService],
 })
 export class BrandKitModule {}

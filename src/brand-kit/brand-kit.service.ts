@@ -1,21 +1,29 @@
 import { Injectable } from '@nestjs/common';
 import { BrandKit } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { RedisService } from 'src/redis/redis.service';
+import { CreateBrandKitDto, UpdateBrandKitDto } from './dtos/create-brand-kit.dto';
 
 @Injectable()
 export class BrandKitService {
-  private readonly cache = new Map<string, BrandKit>();
+  constructor(
+    private prisma: PrismaService,
+    private redisService: RedisService, // Redis integration
+  ) {}
 
-  constructor(private prisma: PrismaService) {}
+  private getCacheKey(organizationId: string) {
+    return `brandkit:${organizationId}`;
+  }
 
+  /** Create a new brand kit and set it as active */
   async create(organizationId: string, data: CreateBrandKitDto) {
-    // Deactivate any existing active brand kit
+    // Deactivate existing active brand kits
     await this.prisma.brandKit.updateMany({
       where: { organizationId, isActive: true },
       data: { isActive: false },
     });
 
-    return this.prisma.brandKit.create({
+    const brandKit = await this.prisma.brandKit.create({
       data: {
         organizationId,
         name: data.name || 'Our Brand',
@@ -29,13 +37,21 @@ export class BrandKitService {
         isDefault: data.isDefault || false,
       },
     });
+
+    // Cache the active brand kit in Redis for 5 minutes
+    await this.redisService.set(
+      this.getCacheKey(organizationId),
+      JSON.stringify(brandKit),
+      300,
+    );
+
+    return brandKit;
   }
 
+  /** Get all brand kits for an organization */
   async findByOrganization(organizationId: string, includeInactive = false) {
     const where: any = { organizationId };
-    if (!includeInactive) {
-      where.isActive = true;
-    }
+    if (!includeInactive) where.isActive = true;
 
     return this.prisma.brandKit.findMany({
       where,
@@ -43,47 +59,67 @@ export class BrandKitService {
     });
   }
 
+  /** Get the currently active brand kit (with Redis caching) */
   async getActiveBrandKit(organizationId: string): Promise<BrandKit | null> {
-    const cacheKey = `brandkit:${organizationId}`;
+    const cacheKey = this.getCacheKey(organizationId);
 
-    if (this.cache.has(cacheKey)) {
-      return this.cache.get(cacheKey);
-    }
+    // Check Redis first
+    const cached = await this.redisService.get(cacheKey);
+    if (cached) return JSON.parse(cached) as BrandKit;
 
+    // Fallback: fetch from DB
     const brandKit = await this.prisma.brandKit.findFirst({
-      where: {
-        organizationId,
-        isActive: true,
-        deletedAt: null,
-      },
+      where: { organizationId, isActive: true, deletedAt: null },
     });
 
     if (brandKit) {
-      this.cache.set(cacheKey, brandKit);
-      // Cache for 5 minutes
-      setTimeout(() => this.cache.delete(cacheKey), 300000);
+      await this.redisService.set(cacheKey, JSON.stringify(brandKit), 300);
     }
 
     return brandKit;
   }
 
+  /** Update a brand kit */
   async update(id: string, organizationId: string, data: UpdateBrandKitDto) {
-    return this.prisma.brandKit.update({
+    const updated = await this.prisma.brandKit.update({
       where: { id, organizationId },
-      data: {
-        ...data,
-        updatedAt: new Date(),
-      },
+      data: { ...data, updatedAt: new Date() },
     });
+
+    // If updated brand kit is active, refresh Redis cache
+    if (updated.isActive) {
+      await this.redisService.set(
+        this.getCacheKey(organizationId),
+        JSON.stringify(updated),
+        300,
+      );
+    }
+
+    return updated;
   }
 
+  /** Get brand kit by ID */
+  async getById(id: string, organizationId?: string): Promise<BrandKit | null> {
+    const where: any = { id, deletedAt: null };
+    if (organizationId) where.organizationId = organizationId;
+
+    return this.prisma.brandKit.findFirst({ where });
+  }
+
+  /** Deactivate a brand kit */
   async deactivate(id: string, organizationId: string) {
-    return this.prisma.brandKit.update({
+    const updated = await this.prisma.brandKit.update({
       where: { id, organizationId },
       data: { isActive: false },
     });
+
+    // Remove from Redis cache
+    await this.redisService.del(this.getCacheKey(organizationId));
+
+    return updated;
   }
 
+  /** Activate a brand kit and deactivate others */
   async activate(id: string, organizationId: string) {
     // Deactivate all others first
     await this.prisma.brandKit.updateMany({
@@ -91,9 +127,18 @@ export class BrandKitService {
       data: { isActive: false },
     });
 
-    return this.prisma.brandKit.update({
+    const updated = await this.prisma.brandKit.update({
       where: { id, organizationId },
       data: { isActive: true },
     });
+
+    // Update Redis cache
+    await this.redisService.set(
+      this.getCacheKey(organizationId),
+      JSON.stringify(updated),
+      300,
+    );
+
+    return updated;
   }
 }

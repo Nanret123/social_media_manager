@@ -1,13 +1,10 @@
-// src/analytics/services/analytics.service.ts
 import { Injectable, Logger } from '@nestjs/common';
-import { PostAnalytics } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AnalyticsQueryDto } from '../dtos/analytics-query.dto';
-import {
-  AnalyticsSummary,
-  PlatformPerformance,
-  TimeSeriesData,
-} from '../dtos/analytics-response.dto';
+import { PostAnalyticsSums } from '../analytics.types';
+import { AnalyticsSummary } from '../dtos/analytics-summary.dto';
+import { PlatformPerformance } from '../dtos/platform-performance.dto';
+import { TimeSeriesData } from '../dtos/time-series-data.dto';
 
 @Injectable()
 export class AnalyticsService {
@@ -15,9 +12,7 @@ export class AnalyticsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Get analytics summary for an organization
-   */
+  /** Get analytics summary for an organization */
   async getOrganizationSummary(
     organizationId: string,
     query: AnalyticsQueryDto,
@@ -37,22 +32,20 @@ export class AnalyticsService {
       },
     });
 
-    const sums = result[0]?._sum || {};
+    const sums = this.normalizeSums(result._sum || {});
 
     return {
-      totalLikes: sums.likes || 0,
-      totalComments: sums.comments || 0,
-      totalShares: sums.shares || 0,
-      totalImpressions: sums.impressions || 0,
-      totalClicks: sums.clicks || 0,
+      totalLikes: sums.likes,
+      totalComments: sums.comments,
+      totalShares: sums.shares,
+      totalImpressions: sums.impressions,
+      totalClicks: sums.clicks,
       engagementRate: this.calculateEngagementRate(sums),
       clickThroughRate: this.calculateClickThroughRate(sums),
     };
   }
 
-  /**
-   * Get platform comparison data
-   */
+  /** Get platform performance */
   async getPlatformPerformance(
     organizationId: string,
     query: AnalyticsQueryDto,
@@ -74,27 +67,25 @@ export class AnalyticsService {
       query,
     );
 
-    return platforms.map((platform) => ({
-      platform: platform.platform,
-      metrics: {
-        totalLikes: platform._sum.likes || 0,
-        totalComments: platform._sum.comments || 0,
-        totalShares: platform._sum.shares || 0,
-        totalImpressions: platform._sum.impressions || 0,
-        totalClicks: platform._sum.clicks || 0,
-        engagementRate: this.calculateEngagementRate(platform._sum),
-        clickThroughRate: this.calculateClickThroughRate(platform._sum),
-      },
-      percentageChange: this.calculatePlatformPercentage(
-        platform,
-        totalMetrics,
-      ),
-    }));
+    return platforms.map((p) => {
+      const sums = this.normalizeSums(p._sum);
+      return {
+        platform: p.platform,
+        metrics: {
+          totalLikes: sums.likes,
+          totalComments: sums.comments,
+          totalShares: sums.shares,
+          totalImpressions: sums.impressions,
+          totalClicks: sums.clicks,
+          engagementRate: this.calculateEngagementRate(sums),
+          clickThroughRate: this.calculateClickThroughRate(sums),
+        },
+        percentageChange: this.calculatePlatformPercentage(sums, totalMetrics),
+      };
+    });
   }
 
-  /**
-   * Get time series data for charts
-   */
+  /** Get time series data for charts */
   async getTimeSeriesData(
     organizationId: string,
     query: AnalyticsQueryDto,
@@ -112,27 +103,28 @@ export class AnalyticsService {
       orderBy: { createdAt: 'asc' },
     });
 
-    return results.map((result) => ({
-      date: result.createdAt.toISOString().split('T')[0],
-      metrics: {
-        totalLikes: result._sum.likes || 0,
-        totalComments: result._sum.comments || 0,
-        totalShares: result._sum.shares || 0,
-        totalImpressions: result._sum.impressions || 0,
-        totalClicks: result._sum.clicks || 0,
-        engagementRate: this.calculateEngagementRate(result._sum),
-        clickThroughRate: this.calculateClickThroughRate(result._sum),
-      },
-    }));
+    return results.map((r) => {
+      const sums = this.normalizeSums(r._sum);
+      return {
+        date: r.createdAt.toISOString().split('T')[0],
+        metrics: {
+          totalLikes: sums.likes,
+          totalComments: sums.comments,
+          totalShares: sums.shares,
+          totalImpressions: sums.impressions,
+          totalClicks: sums.clicks,
+          engagementRate: this.calculateEngagementRate(sums),
+          clickThroughRate: this.calculateClickThroughRate(sums),
+        },
+      };
+    });
   }
 
-  /**
-   * Get top performing posts
-   */
+  /** Get top posts by metric */
   async getTopPosts(
     organizationId: string,
     query: AnalyticsQueryDto,
-    metric: keyof PostAnalytics = 'likes',
+    metric: keyof PostAnalyticsSums = 'likes',
   ) {
     return this.prisma.postAnalytics.findMany({
       where: this.buildWhereClause(organizationId, query),
@@ -150,9 +142,7 @@ export class AnalyticsService {
     });
   }
 
-  /**
-   * Build Prisma where clause from query parameters
-   */
+  /** Build Prisma where clause */
   private buildWhereClause(organizationId: string, query: AnalyticsQueryDto) {
     return {
       organizationId,
@@ -165,41 +155,46 @@ export class AnalyticsService {
     };
   }
 
-  /**
-   * Calculate engagement rate: (likes + comments + shares) / impressions
-   */
-  private calculateEngagementRate(sums: any): number {
-    const engagements =
-      (sums.likes || 0) + (sums.comments || 0) + (sums.shares || 0);
-    const impressions = sums.impressions || 1; // Avoid division by zero
-
-    return impressions > 0 ? engagements / impressions : 0;
+  /** Normalize Prisma _sum results */
+  private normalizeSums(sums: Partial<PostAnalyticsSums>): PostAnalyticsSums {
+    return {
+      likes: sums.likes || 0,
+      comments: sums.comments || 0,
+      shares: sums.shares || 0,
+      impressions: sums.impressions || 0,
+      clicks: sums.clicks || 0,
+      videoViews: sums.videoViews || 0,
+      saves: sums.saves || 0,
+    };
   }
 
-  /**
-   * Calculate click-through rate: clicks / impressions
-   */
-  private calculateClickThroughRate(sums: any): number {
-    const clicks = sums.clicks || 0;
-    const impressions = sums.impressions || 1;
-
-    return impressions > 0 ? clicks / impressions : 0;
+  /** Engagement rate: (likes + comments + shares) / impressions */
+  private calculateEngagementRate(sums: PostAnalyticsSums): number {
+    const engagements = sums.likes + sums.comments + sums.shares;
+    return sums.impressions > 0 ? engagements / sums.impressions : 0;
   }
 
-  /**
-   * Calculate platform percentage of total
-   */
+  /** Click-through rate: clicks / impressions */
+  private calculateClickThroughRate(sums: PostAnalyticsSums): number {
+    return sums.impressions > 0 ? sums.clicks / sums.impressions : 0;
+  }
+
+  /** Platform percentage of total engagements */
   private calculatePlatformPercentage(
-    platform: any,
+    sums: PostAnalyticsSums,
     total: AnalyticsSummary,
   ): number {
-    const platformEngagements =
-      (platform._sum.likes || 0) +
-      (platform._sum.comments || 0) +
-      (platform._sum.shares || 0);
+    const platformEngagements = sums.likes + sums.comments + sums.shares;
     const totalEngagements =
       total.totalLikes + total.totalComments + total.totalShares;
-
     return totalEngagements > 0 ? platformEngagements / totalEngagements : 0;
+  }
+
+  /** Convert period string to start date */
+  private getStartDate(period: '7d' | '30d' | '90d'): Date {
+    const days = parseInt(period.replace('d', ''), 10);
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return date;
   }
 }

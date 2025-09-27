@@ -1,66 +1,83 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
-
-class AuthUserDto {
+export class SafeUser {
   @ApiProperty({
-    description: 'Unique identifier of the user',
-    example: 'a3f6c2e7-5b0a-42d9-9c9c-7c6a8b9f1234',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+    description: 'Unique identifier of the user.',
   })
   id: string;
 
   @ApiProperty({
-    description: 'Email address of the user',
-    example: 'user@example.com',
+    example: 'jane.doe@example.com',
+    description: 'User email address.',
   })
   email: string;
 
   @ApiProperty({
-    description: 'First name of the user',
-    example: 'John',
-    required: false,
+    example: 'Jane',
+    description: 'First name of the user. Nullable if not provided.',
+    nullable: true,
   })
-  firstName?: string;
+  firstName: string | null;
 
   @ApiProperty({
-    description: 'Last name of the user',
     example: 'Doe',
-    required: false,
+    description: 'Last name of the user. Nullable if not provided.',
+    nullable: true,
   })
-  lastName?: string;
+  lastName: string | null;
 
   @ApiProperty({
-    description: 'Role of the user',
+    example: 'https://lh3.googleusercontent.com/a-/AOh14Gh12345xyz',
+    description: 'Profile picture URL of the user. Nullable if not provided.',
+    nullable: true,
+  })
+  avatar: string | null;
+
+  @ApiProperty({
     enum: UserRole,
     example: UserRole.USER,
+    description: 'Role assigned to the user (e.g., ADMIN, USER).',
   })
   role: UserRole;
 
   @ApiProperty({
-    description: 'Indicates whether the user has verified their email',
     example: true,
+    description: 'Indicates whether the user’s email has been verified.',
   })
   isEmailVerified: boolean;
+
+  @ApiProperty({
+    example: '2025-09-25T10:00:00.000Z',
+    description:
+      'Timestamp of the user’s last activity. Nullable if user has never logged in.',
+    nullable: true,
+  })
+  lastActiveAt: Date | null;
 }
 
-class AuthTokensDto {
+export class AuthResponse {
   @ApiProperty({
-    description: 'JWT access token for authentication',
+    type: SafeUser,
+    description: 'Authenticated user details (safe subset).',
+  })
+  user: SafeUser;
+
+  @ApiProperty({
     example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+    description: 'JWT access token for authenticating requests.',
   })
   accessToken: string;
 
   @ApiProperty({
-    description: 'JWT refresh token for renewing access',
-    example: 'dGhpc2lzbXlyZWZyZXNodG9rZW4...',
+    example: 'dGhpc2lzYXJlZnJlc2h0b2tlbg==',
+    description: 'JWT refresh token for obtaining new access tokens.',
   })
   refreshToken: string;
+
+  @ApiProperty({
+    example: true,
+    description: 'Indicates if the user needs to verify their email.',
+  })
+  requiresEmailVerification: boolean;
 }
-
-export class AuthResponse {
-  @ApiProperty({ type: () => AuthUserDto })
-  user: AuthUserDto;
-
-  @ApiProperty({ type: () => AuthTokensDto })
-  tokens: AuthTokensDto;
-}
-

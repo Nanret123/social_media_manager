@@ -1,121 +1,183 @@
-// src/notifications/services/notifications.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { NotificationType, NotificationPriority } from '@prisma/client';
+import { NotificationPriority, NotificationEntity } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
-
-interface CreateNotificationDto {
-  userId: string;
-  organizationId: string;
-  type: NotificationType;
-  title: string;
-  message: string;
-  data?: any;
-  priority?: NotificationPriority;
-  messageId?: string;
-  postId?: string;
-  expiresAt?: Date;
-}
-
+import { CreateNotificationDto } from './dtos/create-notification.dto';
+import { Cron, CronExpression } from '@nestjs/schedule';
 @Injectable()
 export class NotificationService {
-  private readonly logger = new Logger(NotificationService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /**
-   * Create a new notification
+   * Create a notification for a single user
    */
-  async createNotification(createDto: CreateNotificationDto) {
-    try {
-      const notification = await this.prisma.notification.create({
-        data: {
-          userId: createDto.userId,
-          organizationId: createDto.organizationId,
-          type: createDto.type,
-          title: createDto.title,
-          content: createDto.message,
-          data: createDto.data,
-          priority: createDto.priority || NotificationPriority.NORMAL,
-          messageId: createDto.messageId,
-          postId: createDto.postId,
-          expiresAt: createDto.expiresAt,
-        },
-      });
+  async createUserNotification(
+    dto: CreateNotificationDto,
+  ): Promise<NotificationEntity> {
+    const notification = await this.prisma.notificationEntity.create({
+      data: {
+        userId: dto.userId,
+        organizationId: dto.organizationId,
+        socialAccountId: dto.socialAccountId,
+        type: dto.type,
+        title: dto.title,
+        content: dto.message,
+        data: dto.data,
+        priority: dto.priority ?? NotificationPriority.NORMAL,
+        messageId: dto.messageId,
+        postId: dto.postId,
+      },
+    });
 
-      this.logger.log(`Created notification ${notification.id} for user ${createDto.userId}`);
+    // Emit event for real-time delivery via gateway
+    this.eventEmitter.emit('notification.created', notification);
+    return notification;
+  }
 
-      // Emit event for real-time delivery
-      this.eventEmitter.emit('notification.created', notification);
+  /**
+   * Create notifications for multiple users efficiently
+   */
+  async createBulkNotifications(
+    dtos: CreateNotificationDto[],
+  ): Promise<number> {
+    if (!dtos.length) return 0;
 
-      return notification;
+    const result = await this.prisma.notificationEntity.createMany({
+      data: dtos.map((dto) => ({
+        userId: dto.userId,
+        organizationId: dto.organizationId,
+        socialAccountId: dto.socialAccountId,
+        type: dto.type,
+        title: dto.title,
+        content: dto.message,
+        data: dto.data,
+        priority: dto.priority ?? NotificationPriority.NORMAL,
+        messageId: dto.messageId,
+        postId: dto.postId,
+        createdAt: new Date(),
+      })),
+      skipDuplicates: true, // avoid duplicates
+    });
 
-    } catch (error) {
-      this.logger.error('Failed to create notification:', error);
-      throw error;
+    // Optionally emit real-time events for each notification
+    dtos.forEach((dto) => this.eventEmitter.emit('notification.created', dto));
+
+    return result.count;
+  }
+
+  async getUserNotifications(
+    userId: string,
+    organizationId: string,
+    options?: { unreadOnly?: boolean },
+  ): Promise<NotificationEntity[]> {
+    return this.prisma.notificationEntity.findMany({
+      where: {
+        userId,
+        organizationId,
+        ...(options?.unreadOnly ? { readAt: null } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async markAsRead(
+    notificationId: string,
+    userId: string,
+  ): Promise<NotificationEntity> {
+    const notification = await this.prisma.notificationEntity.findFirst({
+      where: { id: notificationId, userId },
+    });
+
+    if (!notification) {
+      throw new NotFoundException('Notification not found');
+    }
+
+    return this.prisma.notificationEntity.update({
+      where: { id: notificationId },
+      data: { readAt: new Date() },
+    });
+  }
+
+  async markAllAsRead(userId: string, organizationId: string): Promise<number> {
+    const result = await this.prisma.notificationEntity.updateMany({
+      where: {
+        userId,
+        organizationId,
+        readAt: null,
+      },
+      data: { readAt: new Date() },
+    });
+
+    return result.count;
+  }
+
+  // ------------------------
+  // CLEANUP (Expired notifications)
+  // ------------------------
+
+  async cleanupExpiredNotifications(): Promise<number> {
+    const now = new Date();
+    const result = await this.prisma.notificationEntity.deleteMany({
+      where: {
+        expiresAt: { lte: now },
+      },
+    });
+    return result.count;
+  }
+
+  /**
+   * Run cleanup automatically every day at midnight
+   * (You can adjust CronExpression)
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async handleCronCleanup() {
+    const deleted = await this.cleanupExpiredNotifications();
+    if (deleted > 0) {
+      console.log(`🧹 Cleaned up ${deleted} expired notifications`);
     }
   }
 
   /**
-   * Get user's notifications
-   */
-  async getUserNotifications(userId: string, organizationId: string, options?: { unreadOnly?: boolean }) {
-    return this.prisma.notification.findMany({
-      where: {
-        userId,
-        organizationId,
-        read: options?.unreadOnly ? false : undefined,
-        OR: [
-          { expiresAt: null },
-          { expiresAt: { gt: new Date() } }
-        ]
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 50, // Limit for performance
-    });
-  }
+   * Fetch audience (user IDs) based on permission
+   **/
 
-  /**
-   * Mark notification as read
-   */
-  async markAsRead(notificationId: string, userId: string) {
-    return this.prisma.notification.updateMany({
+  async getSocialAccountAudience(
+    organizationId: string,
+    socialAccountId: string,
+    requiredPermission: string,
+  ): Promise<string[]> {
+    const members = await this.prisma.socialAccountMember.findMany({
       where: {
-        id: notificationId,
-        userId, // Ensure user owns this notification
+        socialAccountId,
+        isActive: true,
+        socialAccount: {
+          organizationId,
+          isActive: true,
+        },
       },
-      data: { read: true },
+      include: {
+        user: true,
+        role: {
+          include: {
+            permissions: {
+              include: {
+                permission: true,
+              },
+            },
+          },
+        },
+      },
     });
-  }
 
-  /**
-   * Mark all notifications as read
-   */
-  async markAllAsRead(userId: string, organizationId: string) {
-    return this.prisma.notification.updateMany({
-      where: {
-        userId,
-        organizationId,
-        read: false,
-      },
-      data: { read: true },
-    });
-  }
-
-  /**
-   * Clean up expired notifications
-   */
-  async cleanupExpiredNotifications() {
-    const result = await this.prisma.notification.deleteMany({
-      where: {
-        expiresAt: { lt: new Date() },
-      },
-    });
-    
-    this.logger.log(`Cleaned up ${result.count} expired notifications`);
-    return result.count;
+    return members
+      .filter((member) =>
+        member.role?.permissions.some(
+          (rp) => rp.permission.name === requiredPermission,
+        ),
+      )
+      .map((member) => member.user.id);
   }
 }

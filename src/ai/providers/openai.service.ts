@@ -30,4 +30,14 @@ export class OpenAiProvider {
 
     return response;
   }
+
+  async createCompletion(params: { model: string; prompt: string; max_tokens?: number; temperature?: number }) {
+  const completion = await this.openai.chat.completions.create({
+    model: params.model,
+    messages: [{ role: 'user', content: params.prompt }],
+    max_tokens: params.max_tokens,
+    temperature: params.temperature,
+  });
+  return completion;
+}
 }

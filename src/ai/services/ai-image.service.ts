@@ -1,7 +1,11 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { AiUsageService } from './ai-usage.service';
 import { GenerateImageDto } from '../dtos/generate-image.dto';
-import { MediaService } from 'src/media/media.service';
 import { BrandKitService } from 'src/brand-kit/brand-kit.service';
 import { CloudinaryService } from 'src/media/cloudinary.service';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -18,34 +22,40 @@ export class AiImageService {
     private readonly stableDiffusionProvider: StableDiffusionProvider,
     private readonly aiUsageService: AiUsageService,
     private readonly cloudinary: CloudinaryService,
-    private readonly mediaService: MediaService,
   ) {}
 
-   async generateImage(
+  /**
+   * Generate an AI image based on a prompt
+   */
+  async generateImage(
     organizationId: string,
     userId: string,
-    generateDto: GenerateImageDto,
+    dto: GenerateImageDto,
   ) {
     const startTime = Date.now();
     const generationId = cuid();
 
     try {
-      // 1. Get brand kit
-      const brandKit = await this.brandKitService.getActiveBrandKit(organizationId);
+      // 1. Get active brand kit
+      const brandKit =
+        await this.brandKitService.getActiveBrandKit(organizationId);
 
       // 2. Build branded prompt
-      const brandedPrompt = this.buildBrandedPrompt(generateDto.prompt, brandKit);
+      const prompt = this.buildBrandedPrompt(dto.prompt, brandKit);
 
-      // 3. Generate via Replicate
+      // 3. Generate image via provider
       const result = await this.stableDiffusionProvider.generateImage({
-        prompt: brandedPrompt,
-        style: 'photorealistic', // or another default/style from brandKit
-        aspectRatio: '1:1', // or another default/aspect ratio from brandKit
+        prompt,
+        style: dto.style || 'photorealistic',
+        aspectRatio: dto.aspectRatio || '1:1',
       });
 
-      // 4. Upload result directly to Cloudinary (permanent, not temp)
+      // 4. Upload to Cloudinary
       const publicId = `ai-images/${generationId}`;
-      const uploaded = await this.cloudinary.uploadFromUrl(result.imageUrl, publicId);
+      const uploaded = await this.cloudinary.uploadFromUrl(
+        result.imageUrl,
+        publicId,
+      );
 
       // 5. Save generation record
       const generation = await this.prisma.aiImageGeneration.create({
@@ -53,9 +63,9 @@ export class AiImageService {
           id: generationId,
           organizationId,
           userId,
-          prompt: generateDto.prompt,
-          revisedPrompt: brandedPrompt,
-          creditsUsed: 5,
+          prompt: dto.prompt,
+          revisedPrompt: prompt,
+          creditsUsed: 5, // match PLATFORM_RATE_LIMITS.AI.image_generation if needed
           cost: 0.01,
           imageUrl: uploaded.secure_url,
           publicId: uploaded.public_id,
@@ -73,100 +83,100 @@ export class AiImageService {
         type: 'image_generation',
         tokensUsed: 0,
         cost: 0.01,
-        metadata: { generationId: generation.id, model: result.model },
+        metadata: { generationId, model: result.model },
       });
 
-      this.logger.log(`Image generated in ${Date.now() - startTime}ms for org ${organizationId}`);
+      this.logger.log(
+        `AI image generated in ${Date.now() - startTime}ms for org ${organizationId} by user ${userId}`,
+      );
 
       return generation;
     } catch (error) {
-      this.logger.error('AI image generation failed:', error);
+      this.logger.error('AI image generation failed', error);
       throw new Error(`Image generation failed: ${error.message}`);
     }
   }
 
-async approveImage(generationId: string, orgId: string, userId: string) {
-  // 1. Fetch and validate
-  const generation = await this.prisma.aiImageGeneration.findUnique({ where: { id: generationId }});
-  if (!generation || generation.organizationId !== orgId) {
-    throw new NotFoundException('Image generation not found');
-  }
-  if (generation.status === 'APPROVED') {
-    throw new BadRequestException('Already approved');
-  }
-
-  // 2. Transaction: create media + mark generation APPROVED
-  const [media] = await this.prisma.$transaction([
-    // Ensure saveGeneratedMedia returns a PrismaPromise, not a regular Promise
-    this.prisma.mediaFile.create({
-      data: {
-        userId,
-        organizationId: orgId,
-        url: generation.imageUrl,
-        publicId: generation.publicId,
-        filename: `ai-${generationId}.jpg`,
-        originalName: `AI Generated Image`,
-        mimeType: 'image/jpeg',
-        size: 0, // optionally call cloudinary.api.resource(publicId) to get size/dimensions
-        aiGenerationId: generationId,
-        aiGenerationContext: {
-          prompt: generation.prompt,
-          revisedPrompt: generation.revisedPrompt,
-          model: generation.model,
-        },
-      },
-    }),
-    this.prisma.aiImageGeneration.update({
-      where: { id: generationId },
-      data: { status: 'APPROVED' },
-    }),
-  ]);
-
-  return media;
-}
-
-  async rejectImage(generationId: string, orgId: string) {
-    // 1. Verify generation
+  /**
+   * Approve AI-generated image and save as media
+   */
+  async approveImage(generationId: string, orgId: string, userId: string) {
     const generation = await this.prisma.aiImageGeneration.findUnique({
       where: { id: generationId },
     });
+    if (!generation || generation.organizationId !== orgId) {
+      throw new NotFoundException('Image generation not found');
+    }
+    if (generation.status === 'APPROVED') {
+      throw new BadRequestException('Image already approved');
+    }
 
+    const [media] = await this.prisma.$transaction([
+      this.prisma.mediaFile.create({
+        data: {
+          userId,
+          organizationId: orgId,
+          url: generation.imageUrl,
+          publicId: generation.publicId,
+          filename: `ai-${generationId}.jpg`,
+          originalName: 'AI Generated Image',
+          mimeType: 'image/jpeg',
+          size: 0,
+          aiGenerationId: generationId,
+          aiGenerationContext: {
+            prompt: generation.prompt,
+            revisedPrompt: generation.revisedPrompt,
+            model: generation.model,
+          },
+        },
+      }),
+      this.prisma.aiImageGeneration.update({
+        where: { id: generationId },
+        data: { status: 'APPROVED' },
+      }),
+    ]);
+
+    return media;
+  }
+
+  /**
+   * Reject AI-generated image and delete from Cloudinary + DB
+   */
+  async rejectImage(generationId: string, orgId: string) {
+    const generation = await this.prisma.aiImageGeneration.findUnique({
+      where: { id: generationId },
+    });
     if (!generation || generation.organizationId !== orgId) {
       throw new NotFoundException('Image generation not found');
     }
 
-    // 2. Delete from Cloudinary
     await this.cloudinary.deleteImage(generation.publicId);
-
-    // 3. Delete from DB
     await this.prisma.aiImageGeneration.delete({ where: { id: generationId } });
   }
 
-
+  /**
+   * Add brand elements to prompt
+   */
   private buildBrandedPrompt(prompt: string, brandKit: any): string {
-    const brandElements: string[] = [prompt];
+    const elements: string[] = [prompt];
 
     if (brandKit.colors) {
       const colors = Object.values(brandKit.colors).filter(Boolean);
-      if (colors.length > 0) {
-        brandElements.push(`brand colors: ${colors.join(', ')}`);
-      }
+      if (colors.length) elements.push(`brand colors: ${colors.join(', ')}`);
     }
 
     if (brandKit.tone) {
-      const styleMap = {
+      const toneMap: Record<string, string> = {
         PROFESSIONAL: 'clean, professional, corporate',
         CASUAL: 'casual, friendly, approachable',
         WITTY: 'playful, creative, humorous',
         EDUCATIONAL: 'informative, clear, educational',
       };
-      brandElements.push(styleMap[brandKit.tone] || brandKit.tone.toLowerCase());
+      elements.push(toneMap[brandKit.tone] || brandKit.tone.toLowerCase());
     }
 
-    if (brandKit.logoUrl) {
-      brandElements.push('incorporate brand identity subtly');
-    }
+    if (brandKit.logoUrl) elements.push('incorporate brand identity subtly');
 
-    return brandElements.join(', ');
+    return elements.join(', ');
   }
 }

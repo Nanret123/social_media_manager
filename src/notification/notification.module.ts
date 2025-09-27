@@ -1,11 +1,16 @@
 import { Module } from '@nestjs/common';
 import { NotificationService } from './notification.service';
 import { NotificationController } from './notification.controller';
-import { NotificationsGateway } from './gateways/notifications.gateway';
 import { NotificationsListener } from './listeners/notifications.listener';
+import { ChatGateway } from './chat.gateway';
+import { NotificationGateway } from './notification.gateway';
+import { NotificationAudienceService } from './notification-audience.service';
+import { AuthModule } from 'src/auth/auth.module';
 
 @Module({
+  imports: [AuthModule],
   controllers: [NotificationController],
-  providers: [NotificationService, NotificationsListener, NotificationsGateway],
+  providers: [NotificationService, NotificationsListener, NotificationGateway, ChatGateway, NotificationAudienceService],
+  exports: [NotificationService, NotificationAudienceService],
 })
 export class NotificationModule {}

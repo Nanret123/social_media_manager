@@ -5,55 +5,40 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RedisService } from 'src/redis/redis.service';
 import { TooManyRequestsException } from '../filters/too-many-requests.exception';
-
-export const RATE_LIMIT = 'rate_limit';
-export const RateLimit = (operation: keyof typeof RateLimitGuard.RATE_LIMITS) =>
-  SetMetadata(RATE_LIMIT, operation);
+import { RateLimitService } from 'src/rate-limit/rate-limit.service';
+import { RATE_LIMIT } from '../decorators/rate-limit.decorator';
 
 @Injectable()
 export class RateLimitGuard implements CanActivate {
-  static readonly RATE_LIMITS = {
-    CONTENT_GENERATION: { limit: 50, window: 3600 },
-    IMAGE_GENERATION: { limit: 20, window: 3600 },
-  };
-
   constructor(
-    private readonly redisService: RedisService,
+    private readonly rateLimitService: RateLimitService,
     private readonly reflector: Reflector,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const operation = this.reflector.get<string>(
+    const action = this.reflector.get<string>(
       RATE_LIMIT,
       context.getHandler(),
     );
+    if (!action) return true; // no limit set → allow
 
-    if (!operation) return true; // no limit set → skip
-
-    const { limit, window } = RateLimitGuard.RATE_LIMITS[operation];
     const request = context.switchToHttp().getRequest();
-    const userId = request.user?.id || request.ip;
-    const key = `rate_limit:${operation}:${userId}`;
+    const userId = request.user?.id;
+    const organizationId = request.user?.organizationId;
 
-    const current = await this.redisService.get(key);
-    const currentCount = current ? parseInt(current) : 0;
+    if (!userId) return true; // optionally handle unauthenticated users
 
-    if (currentCount >= limit) {
-      throw new TooManyRequestsException(
-        `Rate limit exceeded for ${operation}. Try again in ${Math.ceil(
-          window / 60,
-        )} minutes.`,
+    try {
+      await this.rateLimitService.checkLimit(
+        'AI', // you can pass platform or action type here
+        userId,
+        action,
       );
+      return true;
+    } catch (err: any) {
+      if (err instanceof TooManyRequestsException) throw err;
+      throw new TooManyRequestsException('Rate limit check failed');
     }
-
-    if (currentCount === 0) {
-      await this.redisService.set(key, '1', window);
-    } else {
-      await this.redisService.incr(key);
-    }
-
-    return true;
   }
 }

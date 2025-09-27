@@ -1,22 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
-import { EventEmitter2 } from "@nestjs/event-emitter";
-import { MessagingPlatform, MessageStatus } from "@prisma/client";
-import { PrismaService } from "src/prisma/prisma.service";
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {  MessageStatus, Platform } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { ProcessMessageEvent } from './interfaces/index.interface.dto';
 
-
-interface ProcessMessageEvent {
-  platform: MessagingPlatform;
-  messageData: {
-    id: string;
-    from: string;
-    text: string;
-    timestamp: Date;
-    threadId?: string;
-    mediaUrls?: string[];
-  };
-  socialAccountId: string;
-  organizationId: string;
-}
 
 @Injectable()
 export class MessagingService {
@@ -28,7 +15,7 @@ export class MessagingService {
   ) {}
 
   /**
-   * Process incoming messages from webhooks/polling
+   * Process an incoming message
    */
   async processIncomingMessage(event: ProcessMessageEvent): Promise<void> {
     try {
@@ -37,7 +24,7 @@ export class MessagingService {
         event.organizationId,
         event.platform,
         event.messageData.threadId || event.messageData.id,
-        event.messageData.from
+        event.messageData.from,
       );
 
       // 2. Create message
@@ -46,8 +33,8 @@ export class MessagingService {
           conversationId: conversation.id,
           externalSender: event.messageData.from,
           content: event.messageData.text,
-          mediaUrl: event.messageData.mediaUrls?.[0], // Store first media URL
-          sentAt: event.messageData.timestamp,
+          mediaUrl: event.messageData.mediaUrls?.[0] ?? null, // store first media only
+          sentAt: event.messageData.timestamp ?? new Date(),
           status: MessageStatus.UNREAD,
         },
       });
@@ -55,13 +42,14 @@ export class MessagingService {
       // 3. Update conversation metrics
       await this.updateConversationMetrics(conversation.id);
 
-      this.logger.log(`Processed message ${message.id} in conversation ${conversation.id}`);
+      this.logger.log(
+        `Processed message ${message.id} in conversation ${conversation.id}`,
+      );
 
-      // 4. Emit event for notifications (if needed)
+      // 4. Emit event for notifications
       this.emitNotificationEvent(conversation, message);
-
     } catch (error) {
-      this.logger.error('Failed to process incoming message:', error);
+      this.logger.error('Failed to process incoming message', error.stack);
       throw error;
     }
   }
@@ -71,9 +59,9 @@ export class MessagingService {
    */
   private async findOrCreateConversation(
     organizationId: string,
-    platform: MessagingPlatform,
+    platform: Platform,
     externalThreadId: string,
-    externalUserId: string
+    externalUserId: string,
   ) {
     return this.prisma.conversation.upsert({
       where: {
@@ -86,13 +74,13 @@ export class MessagingService {
       update: {
         updatedAt: new Date(),
         lastMessageAt: new Date(),
-        externalUserId: externalUserId,
+        externalUserId,
       },
       create: {
         organizationId,
         platform,
         externalId: externalThreadId,
-        externalUserId: externalUserId,
+        externalUserId,
         lastMessageAt: new Date(),
         lastMessagePreview: 'New conversation started',
       },
@@ -103,21 +91,23 @@ export class MessagingService {
    * Update conversation unread count and last message preview
    */
   private async updateConversationMetrics(conversationId: string) {
-    const messageCount = await this.prisma.message.count({
-      where: { conversationId, status: MessageStatus.UNREAD },
-    });
-
-    const lastMessage = await this.prisma.message.findFirst({
-      where: { conversationId },
-      orderBy: { sentAt: 'desc' },
-      select: { content: true },
-    });
+    const [unreadCount, lastMessage] = await this.prisma.$transaction([
+      this.prisma.message.count({
+        where: { conversationId, status: MessageStatus.UNREAD },
+      }),
+      this.prisma.message.findFirst({
+        where: { conversationId },
+        orderBy: { sentAt: 'desc' },
+        select: { content: true },
+      }),
+    ]);
 
     await this.prisma.conversation.update({
       where: { id: conversationId },
       data: {
-        unreadCount: messageCount,
-        lastMessagePreview: lastMessage?.content?.substring(0, 100) || 'New message',
+        unreadCount,
+        lastMessagePreview:
+          lastMessage?.content?.substring(0, 100) ?? 'New message',
         updatedAt: new Date(),
       },
     });
@@ -156,7 +146,10 @@ export class MessagingService {
   /**
    * Get messages in a conversation
    */
-  async getConversationMessages(conversationId: string, organizationId: string) {
+  async getConversationMessages(
+    conversationId: string,
+    organizationId: string,
+  ) {
     return this.prisma.message.findMany({
       where: {
         conversationId,
@@ -167,7 +160,7 @@ export class MessagingService {
   }
 
   /**
-   * Mark messages as read
+   * Mark all unread messages as read
    */
   async markAsRead(conversationId: string, organizationId: string) {
     await this.prisma.message.updateMany({
@@ -183,20 +176,20 @@ export class MessagingService {
   }
 
   /**
-   * Send reply to conversation
+   * Send a reply in a conversation
    */
   async sendReply(
     conversationId: string,
     organizationId: string,
     content: string,
-    userId: string
+    userId: string,
   ) {
     const conversation = await this.prisma.conversation.findFirst({
       where: { id: conversationId, organizationId },
     });
 
     if (!conversation) {
-      throw new Error('Conversation not found');
+      throw new NotFoundException('Conversation not found');
     }
 
     const message = await this.prisma.message.create({
@@ -211,7 +204,7 @@ export class MessagingService {
 
     await this.updateConversationMetrics(conversationId);
 
-    // Emit event for outbound message processing
+    // Emit event for outbound processing
     this.eventEmitter.emit('inbox.message.sent', {
       conversationId,
       messageId: message.id,

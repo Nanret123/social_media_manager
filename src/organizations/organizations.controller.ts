@@ -11,58 +11,151 @@ import {
 } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
-import { OrganizationGuard } from 'src/common/guards/organization.guard';
 import { CreateOrganizationDto } from './dtos/create-organization.dto';
 import { UpdateOrganizationDto } from './dtos/update-organization.dto';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { OrganizationUsageDto } from './dtos/organization-usage.dto';
+import { OrganizationStatsDto } from './dtos/organization-stats.dto';
 
-@Controller('organizations')
+@ApiTags('Organizations')
 @UseGuards(JwtAuthGuard)
+@Controller('organizations')
 export class OrganizationsController {
   constructor(private readonly organizationsService: OrganizationsService) {}
 
   @Post()
-  create(@Req() req, @Body() createOrganizationDto: CreateOrganizationDto) {
-    return this.organizationsService.createOrganization(
-      req.user.id,
-      createOrganizationDto,
-    );
+  @ApiOperation({
+    summary: 'Create organization',
+    description:
+      'Creates a new organization and assigns the authenticated user as owner.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Organization created successfully',
+    schema: {
+      example: {
+        id: 'org-uuid',
+        name: 'Acme Corp',
+        slug: 'acme-corp',
+        timezone: 'UTC',
+        billingEmail: 'billing@acme.com',
+        planTier: 'FREE',
+        planStatus: 'ACTIVE',
+        maxMembers: 5,
+        monthlyCreditLimit: 1000,
+      },
+    },
+  })
+  async createOrganization(@Req() req, @Body() dto: CreateOrganizationDto) {
+    return this.organizationsService.createOrganization(req.user.id, dto);
   }
 
   @Get(':id')
-  @UseGuards(OrganizationGuard)
-  findOne(@Param('id') id: string, @Req() req) {
-    return this.organizationsService.getOrganization(id, req.user.id);
+  @ApiOperation({
+    summary: 'Get organization',
+    description:
+      'Returns organization details if the authenticated user is a member.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Organization details retrieved',
+    schema: {
+      example: {
+        id: 'org-uuid',
+        name: 'Acme Corp',
+        slug: 'acme-corp',
+        timezone: 'UTC',
+        billingEmail: 'billing@acme.com',
+        isActive: true,
+      },
+    },
+  })
+  async getOrganization(@Req() req, @Param('id') orgId: string) {
+    return this.organizationsService.getOrganization(orgId, req.user.id);
   }
 
   @Patch(':id')
-  @UseGuards(OrganizationGuard)
-  update(
-    @Param('id') id: string,
+  @ApiOperation({
+    summary: 'Update organization',
+    description:
+      'Updates organization details. Only accessible by organization owners.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Organization updated successfully',
+    schema: {
+      example: {
+        id: 'org-uuid',
+        name: 'Updated Name',
+        slug: 'updated-slug',
+        timezone: 'UTC',
+        billingEmail: 'billing@acme.com',
+        updatedAt: '2025-09-25T10:00:00.000Z',
+      },
+    },
+  })
+  async updateOrganization(
     @Req() req,
-    @Body() updateOrganizationDto: UpdateOrganizationDto,
+    @Param('id') orgId: string,
+    @Body() dto: UpdateOrganizationDto,
   ) {
     return this.organizationsService.updateOrganization(
-      id,
+      orgId,
       req.user.id,
-      updateOrganizationDto,
+      dto,
     );
   }
 
   @Delete(':id')
-  @UseGuards(OrganizationGuard)
-  remove(@Param('id') id: string, @Req() req) {
-    return this.organizationsService.deleteOrganization(id, req.user.id);
+  @ApiOperation({
+    summary: 'Delete organization',
+    description:
+      'Soft deletes an organization and deactivates all members. Only owners can perform this.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Organization deleted successfully',
+    schema: {
+      example: { success: true, message: 'Organization deleted successfully' },
+    },
+  })
+  async deleteOrganization(@Req() req, @Param('id') orgId: string) {
+    return this.organizationsService.deleteOrganization(orgId, req.user.id);
   }
 
   @Get(':id/usage')
-  @UseGuards(OrganizationGuard)
-  getUsage(@Param('id') id: string, @Req() req) {
-    return this.organizationsService.getOrganizationUsage(id, req.user.id);
+  @ApiOperation({
+    summary: 'Get organization usage',
+    description:
+      'Returns statistics about organization usage like member count, AI credits, posts, and media storage.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Organization usage data retrieved',
+    type: OrganizationUsageDto,
+  })
+  async getUsage(
+    @Req() req,
+    @Param('id') orgId: string,
+  ): Promise<OrganizationUsageDto> {
+    return this.organizationsService.getOrganizationUsage(orgId, req.user.id);
   }
 
   @Get(':id/stats')
-  @UseGuards(OrganizationGuard)
-  getStats(@Param('id') id: string, @Req() req) {
-    return this.organizationsService.getOrganizationStats(id, req.user.id);
+  @ApiOperation({
+    summary: 'Get organization statistics',
+    description:
+      'Returns statistics about engagement, AI generations, scheduled posts, and team members.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Organization stats retrieved',
+    type: OrganizationStatsDto,
+  })
+  async getStats(
+    @Req() req,
+    @Param('id') orgId: string,
+  ): Promise<OrganizationStatsDto> {
+    return this.organizationsService.getOrganizationStats(orgId, req.user.id);
   }
 }

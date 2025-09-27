@@ -7,10 +7,8 @@ import {
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateOrganizationDto } from './dtos/create-organization.dto';
 import { UpdateOrganizationDto } from './dtos/update-organization.dto';
-import {
-  OrganizationUsage,
-  OrganizationStats,
-} from './types/organization.types';
+import { OrganizationUsageDto } from './dtos/organization-usage.dto';
+import { OrganizationStatsDto } from './dtos/organization-stats.dto';
 
 @Injectable()
 export class OrganizationsService {
@@ -41,12 +39,23 @@ export class OrganizationsService {
         },
       });
 
+      let ownerRole = await tx.role.findUnique({ where: { name: 'OWNER' } });
+      if (!ownerRole) {
+        ownerRole = await tx.role.create({
+          data: {
+            name: 'OWNER',
+            description: 'Full access to organization',
+            isSystem: true,
+          },
+        });
+      }
+
       // Add user as owner
       await tx.organizationMember.create({
         data: {
           organizationId: organization.id,
           userId: userId,
-          role: 'OWNER',
+          roleId: ownerRole.id,
           invitedBy: userId,
         },
       });
@@ -137,7 +146,7 @@ export class OrganizationsService {
   async getOrganizationUsage(
     orgId: string,
     userId: string,
-  ): Promise<OrganizationUsage> {
+  ): Promise<OrganizationUsageDto> {
     await this.verifyMembership(orgId, userId);
 
     const [organization, memberCount, creditUsage, postCount, mediaStorage] =
@@ -170,7 +179,7 @@ export class OrganizationsService {
   async getOrganizationStats(
     orgId: string,
     userId: string,
-  ): Promise<OrganizationStats> {
+  ): Promise<OrganizationStatsDto> {
     await this.verifyMembership(orgId, userId);
 
     const stats = await this.prisma.organization.findUnique({
@@ -242,11 +251,15 @@ export class OrganizationsService {
   }
 
   private async verifyOwnership(orgId: string, userId: string) {
+    let ownerRole = await this.prisma.role.findUnique({
+      where: { name: 'OWNER' },
+    });
+
     const membership = await this.prisma.organizationMember.findFirst({
       where: {
         organizationId: orgId,
         userId: userId,
-        role: 'OWNER',
+        roleId: ownerRole.id,
         isActive: true,
       },
     });

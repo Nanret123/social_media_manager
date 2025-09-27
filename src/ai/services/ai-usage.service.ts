@@ -1,15 +1,7 @@
 // src/ai/services/ai-usage.service.ts
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../prisma.service';
-
-interface TrackUsageParams {
-  organizationId: string;
-  userId: string;
-  type: string;
-  tokensUsed: number;
-  cost: number;
-  metadata?: any;
-}
+import { PrismaService } from 'src/prisma/prisma.service';
+import { TrackUsageParams } from '../interfaces/index.interface';
 
 @Injectable()
 export class AiUsageService {
@@ -17,6 +9,9 @@ export class AiUsageService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Track an AI usage event
+   */
   async trackUsage(params: TrackUsageParams) {
     try {
       await this.prisma.aIUsage.create({
@@ -30,16 +25,20 @@ export class AiUsageService {
         },
       });
 
-      // Update organization's monthly usage (could be cached in Redis)
+      // Optional: Update organization's monthly usage (can later use Redis caching)
       await this.updateMonthlyUsage(params.organizationId, params.cost);
-
     } catch (error) {
       this.logger.error('Failed to track AI usage:', error);
-      // Don't throw - usage tracking shouldn't break the main functionality
+      // Do not throw - usage tracking should not break main functionality
     }
   }
 
-  async getMonthlyUsage(organizationId: string): Promise<{ cost: number; tokens: number }> {
+  /**
+   * Get the total AI usage for the current month for an organization
+   */
+  async getMonthlyUsage(
+    organizationId: string,
+  ): Promise<{ cost: number; tokens: number }> {
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
@@ -62,9 +61,13 @@ export class AiUsageService {
     };
   }
 
+  /**
+   * Update monthly usage (currently just logs, can integrate Redis cache later)
+   */
   private async updateMonthlyUsage(organizationId: string, cost: number) {
-    // Could implement Redis caching for frequent updates
-    // For now, we just log - you can add Redis later
-    this.logger.debug(`Organization ${organizationId} AI cost increased by $${cost}`);
+    this.logger.debug(
+      `Organization ${organizationId} AI cost increased by $${cost}`,
+    );
+    // Future: update Redis or other cache for quick monthly usage read
   }
 }

@@ -1,29 +1,15 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Post,
-  Query,
-  Request,
-  Res,
-  Response,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
   ApiOperation,
+  ApiParam,
   ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { ConfigService } from '@nestjs/config';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { AuthResponse } from './dtos/AuthResponse.dto';
 import { ForgotPassword } from './dtos/ForgotPassword.dto';
@@ -31,17 +17,18 @@ import { Login } from './dtos/Login.dto';
 import { Register } from './dtos/Register.dto';
 import { ResetPassword } from './dtos/ResetPassword.dto';
 import { OAuthLoginDto } from './dtos/oauth-login.dto';
-import { User } from '@prisma/client';
+import { AuthProvider, User } from '@prisma/client';
+import { Public } from './decorators/public.decorator';
+import { Response } from 'express';
+import { EAuthProvider } from './enums/provider.enum';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(
-    private authService: AuthService,
-    private configService: ConfigService,
-  ) {}
+  constructor(private authService: AuthService) {}
 
   @Post('register')
+  @Public()
   @Throttle({ default: { limit: 5, ttl: 60 } })
   @ApiOperation({
     summary: 'Register a new user',
@@ -54,6 +41,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Public()
   @Throttle({ default: { limit: 3, ttl: 60 } })
   @ApiOperation({
     summary: 'User login',
@@ -65,6 +53,7 @@ export class AuthController {
   }
 
   @Post('oauth')
+  @Public()
   @Throttle({ default: { limit: 10, ttl: 60 } })
   @Post('oauth-login')
   @ApiOperation({
@@ -81,6 +70,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @Public()
   @ApiOperation({
     summary: 'Refresh JWT tokens',
     description: 'Provide refresh token to get new access and refresh tokens',
@@ -100,6 +90,7 @@ export class AuthController {
   }
 
   @Post('verify-email')
+  @Public()
   @ApiOperation({
     summary: 'Verify user email',
     description: 'Verify a newly registered user using token sent via email',
@@ -113,6 +104,7 @@ export class AuthController {
   }
 
   @Post('forgot-password')
+  @Public()
   @ApiOperation({
     summary: 'Request password reset',
     description: 'Send password reset email with token',
@@ -129,6 +121,7 @@ export class AuthController {
   }
 
   @Post('reset-password')
+  @Public()
   @ApiOperation({
     summary: 'Reset password',
     description: 'Reset user password using token from email',
@@ -142,6 +135,7 @@ export class AuthController {
   }
 
   @Post('resend-verification')
+  @Public()
   @ApiOperation({
     summary: 'Resend email verification',
     description:
@@ -162,9 +156,63 @@ export class AuthController {
     };
   }
 
+  @Get(':provider')
+  @Public()
+  @ApiOperation({ summary: 'Start OAuth flow' })
+  @ApiParam({
+    name: 'provider',
+    enum: ['google', 'facebook', 'github'], // <-- adjust to your supported providers
+    description: 'OAuth provider to use',
+  })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirects the user to the provider’s login page',
+  })
+  async redirectToProvider(
+    @Param('provider') provider: EAuthProvider,
+    @Res() res: Response,
+  ) {
+    const url = await this.authService.getOAuthRedirectUrl(provider);
+    console.log(url);
+    return res.redirect(url);
+  }
+
+  @Get(':provider/callback')
+  @Public()
+  @ApiOperation({ summary: 'Handle OAuth provider callback' })
+  @ApiParam({
+    name: 'provider',
+    enum: ['google', 'facebook', 'github'],
+    description: 'OAuth provider to use',
+  })
+  @ApiQuery({
+    name: 'code',
+    required: true,
+    description: 'Authorization code returned by the provider',
+  })
+  @ApiResponse({
+    status: 302,
+    description:
+      'Redirects to frontend with access token in query params (e.g. https://your-frontend.com/oauth-success?token=...)',
+  })
+  async handleCallback(
+    @Param('provider') provider: EAuthProvider,
+    @Query('code') code: string,
+  ) {
+    const authResponse = await this.authService.handleOAuthCallback(
+      provider,
+      code,
+    );
+
+    // Example: redirect back to frontend with JWT
+    // return res.redirect(
+    //   `https://your-frontend.com/oauth-success?accessToken=${authResponse.accessToken}`,
+    // );
+
+    return authResponse;
+  }
+
   @Get('profile')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get current user profile' })
   @ApiResponse({
     status: 200,

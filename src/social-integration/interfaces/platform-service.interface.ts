@@ -1,12 +1,24 @@
-// src/social-integration/interfaces/platform-service.interface.ts
-import { Platform } from '@prisma/client';
-
 export interface PlatformUser {
   id: string;
   username: string;
   name: string;
-  profilePicture?: string;
+  profilePicture: string | null;
+  metadata?: {
+    accountType?: 'instagram' | 'facebook';
+    pageId?: string;
+    pageName?: string;
+    pageAccessToken?: string;
+    instagramAccountId?: string;
+    isPersonalAccount?: boolean;
+  };
 }
+
+export interface OAuthState {
+  organizationId: string;
+  userId: string;
+  redirectUri?: string;
+}
+
 
 export interface PlatformService {
   /**
@@ -17,7 +29,7 @@ export interface PlatformService {
   /**
    * Get user profile information
    */
-  getUserProfile(accessToken: string): Promise<PlatformUser>;
+ getUserProfile(accessToken: string): Promise<PlatformUser>;
 
   /**
    * Revoke access token (for disconnect)

@@ -11,7 +11,7 @@ export class MailService {
     await this.mailerService.sendMail({
       to: email,
       subject: 'Verify your Rooli account',
-      template: './verify-email', // 👈 refers to templates/verify-email.hbs
+      template: 'verify-email', // 👈 refers to templates/verify-email.hbs
       context: {
         verificationUrl,
       },

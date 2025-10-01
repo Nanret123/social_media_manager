@@ -22,6 +22,7 @@ import { ForgotPassword } from './dtos/ForgotPassword.dto';
 import { ResetPassword } from './dtos/ResetPassword.dto';
 import { OAuthProfile } from './interfaces/google-profile.interface';
 import { OAuth2Client } from 'google-auth-library';
+import { EAuthProvider } from './enums/provider.enum';
 
 @Injectable()
 export class AuthService {
@@ -78,7 +79,7 @@ export class AuthService {
       const tokens = await this.generateTokens(user);
 
       // Send verification email (non-blocking)
-      this.sendVerificationEmail(user.email, plainToken);
+      //this.sendVerificationEmail(user.email, plainToken);
 
       this.logger.log(`New user registered: ${user.email}`);
       return {
@@ -140,9 +141,15 @@ export class AuthService {
     };
   }
 
-  async loginWithOAuth(
-    profile: OAuthLoginDto,
+  async handleOAuthCallback(
+    provider: EAuthProvider,
+    code: string,
   ): Promise<AuthResponse> {
+    const profile = await this.getProfileFromCode(provider, code);
+    return this.loginWithOAuth(profile);
+  }
+
+  async loginWithOAuth(profile: OAuthLoginDto): Promise<AuthResponse> {
     const { provider } = profile;
     return this.prisma.$transaction(async (tx) => {
       const providerField = this.getProviderField(provider);
@@ -210,6 +217,62 @@ export class AuthService {
     });
   }
 
+  async getOAuthRedirectUrl(provider: EAuthProvider): Promise<string> {
+    if (provider === EAuthProvider.GOOGLE) {
+      const params = new URLSearchParams({
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        redirect_uri: process.env.GOOGLE_CALLBACK_URL,
+        response_type: 'code',
+        scope: 'openid email profile',
+        access_type: 'offline', // optional: lets you get refresh tokens
+        prompt: 'consent',
+      });
+      return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+    }
+    throw new BadRequestException('Unsupported provider');
+  }
+
+  async getProfileFromCode(
+    provider: EAuthProvider,
+    code: string,
+  ): Promise<OAuthLoginDto> {
+    if (provider === EAuthProvider.GOOGLE) {
+      const decodedCode = decodeURIComponent(code);
+      // 1. Exchange code for tokens
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code: decodedCode,
+          client_id: process.env.GOOGLE_CLIENT_ID,
+          client_secret: process.env.GOOGLE_CLIENT_SECRET,
+          redirect_uri: process.env.GOOGLE_CALLBACK_URL,
+          grant_type: 'authorization_code',
+        }),
+      });
+      const tokens = await tokenResponse.json();
+
+      // 2. Fetch user profile
+      const profileResponse = await fetch(
+        'https://openidconnect.googleapis.com/v1/userinfo',
+        {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        },
+      );
+      const profile = await profileResponse.json();
+
+      return {
+        provider: AuthProvider.GOOGLE,
+        id: profile.sub,
+        email: profile.email,
+        firstName: profile.given_name,
+        lastName: profile.family_name,
+        avatar: profile.picture,
+      } as OAuthLoginDto;
+    }
+    throw new BadRequestException('Unsupported provider');
+  }
+
   async refreshTokens(refreshToken: string): Promise<AuthResponse> {
     try {
       const payload = this.jwtService.verify(refreshToken, {
@@ -268,7 +331,7 @@ export class AuthService {
     this.logger.log(`Email verified for user: ${user.email}`);
   }
 
-  async forgotPassword(dto: ForgotPassword): Promise<void> {
+  async forgotPassword(dto: ForgotPassword): Promise<User> {
     const user = await this.prisma.user.findUnique({
       where: {
         email: dto.email.toLowerCase(),
@@ -286,7 +349,7 @@ export class AuthService {
     const { plainToken, hashedToken } = await this.generateVerificationToken();
     const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    await this.prisma.user.update({
+    const _user = await this.prisma.user.update({
       where: { id: user.id },
       data: {
         resetPasswordToken: hashedToken,
@@ -299,6 +362,7 @@ export class AuthService {
       .catch((err) => this.logger.error('Failed to send reset email:', err));
 
     this.logger.log(`Password reset requested for: ${user.email}`);
+    return _user;
   }
 
   async resetPassword(dto: ResetPassword): Promise<void> {
@@ -355,7 +419,7 @@ export class AuthService {
       },
     });
 
-    this.sendVerificationEmail(user.email, plainToken);
+    //this.sendVerificationEmail(user.email, plainToken);
   }
 
   // OAuth profile methods remain similar but with better error handling
@@ -394,7 +458,7 @@ export class AuthService {
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
         secret: this.configService.get('JWT_SECRET'),
-        expiresIn: this.configService.get('JWT_EXPIRES_IN', '15m'),
+        expiresIn: this.configService.get('JWT_EXPIRES_IN', '7d'),
       }),
       this.jwtService.signAsync(payload, {
         secret: this.configService.get('JWT_REFRESH_SECRET'),

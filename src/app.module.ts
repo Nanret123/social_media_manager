@@ -78,7 +78,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
 
     //AuditModule,
 
-    PollingModule,
+    //PollingModule,
 
     SocialAccountModule,
 

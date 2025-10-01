@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -13,12 +14,19 @@ import { OrganizationsService } from './organizations.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { CreateOrganizationDto } from './dtos/create-organization.dto';
 import { UpdateOrganizationDto } from './dtos/update-organization.dto';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiOkResponse,
+} from '@nestjs/swagger';
 import { OrganizationUsageDto } from './dtos/organization-usage.dto';
 import { OrganizationStatsDto } from './dtos/organization-stats.dto';
+import { GetAllOrganizationsDto } from './dtos/get-organiations.dto';
 
 @ApiTags('Organizations')
-@UseGuards(JwtAuthGuard)
+@ApiBearerAuth()
 @Controller('organizations')
 export class OrganizationsController {
   constructor(private readonly organizationsService: OrganizationsService) {}
@@ -48,6 +56,13 @@ export class OrganizationsController {
   })
   async createOrganization(@Req() req, @Body() dto: CreateOrganizationDto) {
     return this.organizationsService.createOrganization(req.user.id, dto);
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'Get all organizations with optional filters' })
+  @ApiOkResponse({ description: 'List of organizations' })
+  async getAll(@Query() query: GetAllOrganizationsDto) {
+    return this.organizationsService.getAllOrganizations(query);
   }
 
   @Get(':id')

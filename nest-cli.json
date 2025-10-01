@@ -6,9 +6,18 @@
     "assets": [
       {
         "include": "mail/templates/**/*.hbs",
-        "outDir": "dist/src"
+        "outDir": "dist"
       }
     ],
-    "deleteOutDir": true
+     "watchAssets": true,
+    "deleteOutDir": true,
+    "plugins": [
+      {
+        "name": "@nestjs/swagger",
+        "options": {
+          "introspectComments": true
+        }
+      }
+    ]
   }
 }

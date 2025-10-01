@@ -1,42 +1,51 @@
-// src/social-account/dto/create-social-account.dto.ts
-import { IsEnum, IsNotEmpty, IsOptional, IsString, IsArray } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsArray, IsDateString } from 'class-validator';
 import { Platform } from '@prisma/client';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateSocialAccountDto {
-  @IsNotEmpty()
+  @ApiProperty({ description: 'ID of the organization', example: 'org_123abc' })
   @IsString()
+  @IsNotEmpty()
   organizationId: string;
 
-  @IsEnum(Platform)
+  @ApiProperty({ description: 'Social platform', enum: Platform })
+  @IsString()
   platform: Platform;
 
-  @IsNotEmpty()
+  @ApiProperty({ description: 'Platform account ID', example: '1234567890' })
   @IsString()
-  accountId: string;
+  platformAccountId: string;
 
-  @IsOptional()
+  @ApiProperty({ description: 'Username on the platform', example: 'john_doe' })
   @IsString()
-  username?: string;
+  username: string;
 
+  @ApiPropertyOptional({ description: 'Full name on the platform', example: 'John Doe' })
   @IsOptional()
   @IsString()
   name?: string;
 
+  @ApiPropertyOptional({ description: 'Profile picture URL' })
   @IsOptional()
   @IsString()
   profilePicture?: string;
 
-  @IsNotEmpty()
+  @ApiPropertyOptional({ description: 'OAuth access token' })
+  @IsOptional()
   @IsString()
-  accessToken: string;
+  accessToken?: string;
 
+  @ApiPropertyOptional({ description: 'OAuth refresh token' })
   @IsOptional()
   @IsString()
   refreshToken?: string;
 
+  @ApiPropertyOptional({ description: 'Token expiration date in ISO format', example: '2025-12-31T23:59:59Z' })
   @IsOptional()
-  tokenExpiresAt?: Date;
+  @IsDateString()
+  tokenExpiresAt?: string;
 
+  @ApiPropertyOptional({ description: 'Scopes granted by the token', example: ['email','profile'] })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })

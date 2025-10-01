@@ -1,4 +1,3 @@
-// src/social-integration/services/platforms/x.service.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { PlatformService, PlatformUser } from '../interfaces/platform-service.interface';
 

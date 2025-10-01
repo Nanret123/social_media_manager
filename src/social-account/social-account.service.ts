@@ -17,7 +17,7 @@ export class SocialAccountService {
   async upsertSocialAccount(
     createDto: CreateSocialAccountDto,
   ): Promise<SocialAccount> {
-    const { organizationId, platform, accountId } = createDto;
+    const { organizationId, platform, platformAccountId } = createDto;
 
     try {
       const socialAccount = await this.prisma.socialAccount.upsert({
@@ -25,7 +25,7 @@ export class SocialAccountService {
           organizationId_platform_platformAccountId: {
             organizationId,
             platform,
-            platformAccountId: accountId,
+            platformAccountId,
           },
         },
         update: {
@@ -42,7 +42,7 @@ export class SocialAccountService {
         create: {
           organizationId: createDto.organizationId,
           platform: createDto.platform,
-          platformAccountId: createDto.accountId,
+          platformAccountId: createDto.platformAccountId,
           username: createDto.username,
           name: createDto.name,
           profileImage: createDto.profilePicture,
@@ -55,7 +55,7 @@ export class SocialAccountService {
       });
 
       this.logger.log(
-        `Social account upserted: ${platform} account ${accountId} for org ${organizationId}`,
+        `Social account upserted: ${platform} account ${platformAccountId} for org ${organizationId}`,
       );
       return socialAccount;
     } catch (error) {

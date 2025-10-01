@@ -9,6 +9,7 @@ import { CreateOrganizationDto } from './dtos/create-organization.dto';
 import { UpdateOrganizationDto } from './dtos/update-organization.dto';
 import { OrganizationUsageDto } from './dtos/organization-usage.dto';
 import { OrganizationStatsDto } from './dtos/organization-stats.dto';
+import { GetAllOrganizationsDto } from './dtos/get-organiations.dto';
 
 @Injectable()
 export class OrganizationsService {
@@ -31,7 +32,7 @@ export class OrganizationsService {
           name: dto.name,
           slug: dto.slug,
           timezone: dto.timezone || 'UTC',
-          billingEmail: dto.billingEmail,
+          email: dto.email,
           planTier: 'FREE',
           planStatus: 'ACTIVE',
           maxMembers: 5, // Default limit
@@ -102,11 +103,31 @@ export class OrganizationsService {
     return membership.organization;
   }
 
+   async getAllOrganizations(dto: GetAllOrganizationsDto) {
+    const { name, isActive, planTier, planStatus, skip = 0, take = 20 } = dto;
+
+    const where: any = {};
+
+    if (name) where.name = { contains: name, mode: 'insensitive' };
+    if (isActive !== undefined) where.isActive = isActive;
+    if (planTier) where.planTier = planTier;
+    if (planStatus) where.planStatus = planStatus;
+
+    const organizations = await this.prisma.organization.findMany({
+      where,
+      skip,
+      take,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return organizations;
+  }
+
   async updateOrganization(
     orgId: string,
     userId: string,
     dto: UpdateOrganizationDto,
-  ) {
+  ) {;
     await this.verifyOwnership(orgId, userId);
 
     return this.prisma.organization.update({
@@ -136,8 +157,7 @@ export class OrganizationsService {
       });
 
       // Cancel any active subscriptions
-      // This would integrate with your billing service
-      await this.cancelSubscription(orgId);
+      //await this.cancelSubscription(orgId);
 
       return { success: true, message: 'Organization deleted successfully' };
     });

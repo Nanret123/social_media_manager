@@ -3,11 +3,13 @@ import { SocialIntegrationService } from './social-integration.service';
 import { SocialIntegrationController } from './social-integration.controller';
 import { SocialAccountModule } from 'src/social-account/social-account.module';
 import { HttpModule } from '@nestjs/axios';
-import { CryptoService } from 'src/shared/encryption/crypto.service';
 import { PlatformServiceFactory } from './platform-service.factory';
 import { LinkedInService } from './platforms/linkedin.service';
 import { MetaService } from './platforms/meta.service';
 import { XService } from './platforms/x.service';
+import { EncryptionService } from 'src/common/utility/encryption.service';
+import { PKCEService } from 'src/common/utility/pkce-service';
+
 
 @Module({
   imports: [
@@ -21,12 +23,12 @@ import { XService } from './platforms/x.service';
     MetaService,
     XService,
     LinkedInService,
-    CryptoService,
     PlatformServiceFactory,
     MetaService,
     XService,
     LinkedInService,
-    CryptoService,
+    EncryptionService,
+    PKCEService
   ],
 })
 export class SocialIntegrationModule {}

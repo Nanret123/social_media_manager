@@ -71,7 +71,7 @@
     "streamifier": "^0.1.1",
     "stripe": "^18.5.0",
     "swagger-ui-express": "^5.0.1",
-    "twitter-api-v2": "^1.25.0",
+    "twitter-api-v2": "^1.27.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

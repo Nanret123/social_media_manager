@@ -1,4 +1,13 @@
-import { Controller, Post, Body, UseGuards, Param, Get } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Param,
+  Get,
+  Delete,
+  Req,
+} from '@nestjs/common';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import {
   ApiTags,
@@ -6,6 +15,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBody,
+  ApiParam,
 } from '@nestjs/swagger';
 import { GenerateContentDto } from './dtos/generate-content.dto';
 import { AiContentService } from './services/ai-content.service';
@@ -18,7 +28,7 @@ import { AiUsageService } from './services/ai-usage.service';
 
 @ApiTags('AI')
 @ApiBearerAuth()
-@Controller('ai')
+@Controller('ai/:organizationId')
 @UseGuards(RateLimitGuard)
 export class AiController {
   constructor(
@@ -27,13 +37,13 @@ export class AiController {
     private readonly aiUsageService: AiUsageService,
   ) {}
 
-  @Post('generate')
+  @Post('generate/content')
   @UseGuards(RateLimitGuard)
-  @RateLimit('CONTENT_GENERATION') // action name used in RateLimitService
+  //@RateLimit('CONTENT_GENERATION') // action name used in RateLimitService
   @ApiOperation({ summary: 'Generate AI-powered content' })
   async generateContent(
     @CurrentUser('id') userId: string,
-    @CurrentUser('organizationId') organizationId: string,
+    @Param('organizationId') organizationId: string,
     @Body() dto: GenerateContentDto,
   ) {
     return this.aiContentService.generateContent(organizationId, userId, dto);
@@ -45,10 +55,10 @@ export class AiController {
   @ApiOperation({ summary: 'Enhance AI-generated content' })
   async enhanceContent(
     @CurrentUser('id') userId: string,
-    @CurrentUser('organizationId') organizationId: string,
+    @Param('organizationId') organizationId: string,
     @Body() dto: EnhanceContentDto,
   ) {
-    return this.aiContentService.enhanceContent(dto.content, {
+    return this.aiContentService.enhanceContent(dto.contentId, {
       platform: dto.platform,
       tone: dto.tone,
       style: dto.style,
@@ -61,7 +71,7 @@ export class AiController {
     });
   }
 
-  @Post('generate')
+  @Post('generate/image')
   @UseGuards(RateLimitGuard)
   @RateLimit('image_generation')
   @ApiOperation({ summary: 'Generate an AI image based on prompt' })
@@ -70,36 +80,35 @@ export class AiController {
   @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   async generateImage(
     @CurrentUser('id') userId: string,
-    @CurrentUser('organizationId') orgId: string,
+    @Param('organizationId') organizationId: string,
     @Body() dto: GenerateImageDto,
   ) {
-    return this.aiImageService.generateImage(orgId, userId, dto);
+    return this.aiImageService.generateImage(organizationId, userId, dto);
   }
 
-  @Post('approve/:id')
-  @ApiOperation({ summary: 'Approve AI-generated image and save as media' })
-  @ApiResponse({ status: 200, description: 'Image approved successfully' })
-  @ApiResponse({ status: 404, description: 'Image generation not found' })
-  async approveImage(
-    @Param('id') generationId: string,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('organizationId') orgId: string,
-  ) {
-    return this.aiImageService.approveImage(generationId, orgId, userId);
-  }
-
-  @Post('reject/:id')
-  @ApiOperation({ summary: 'Reject AI-generated image and delete it' })
-  @ApiResponse({
-    status: 200,
-    description: 'Image rejected and deleted successfully',
+  @Delete(':generationId')
+  @ApiOperation({
+    summary: 'Delete AI-generated image',
+    description:
+      'Deletes an AI-generated image and its associated media record from Cloudinary and the database. Only accessible to authenticated users within the organization.',
   })
-  @ApiResponse({ status: 404, description: 'Image generation not found' })
-  async rejectImage(
-    @Param('id') generationId: string,
-    @CurrentUser('organizationId') orgId: string,
-  ) {
-    return this.aiImageService.rejectImage(generationId, orgId);
+  @ApiParam({
+    name: 'generationId',
+    type: String,
+    description: 'Unique ID of the AI-generated image record',
+    example: 'gen_abc123',
+  })
+  @ApiResponse({
+    status: 204,
+    description: 'Image deleted successfully (no content returned)',
+  })
+  async deleteAiImage(
+    @Param('generationId') generationId: string,
+    @Param('organizationId') organizationId: string,
+    @Req() req: any,
+  ): Promise<void> {
+    // Optionally check user/org permissions here
+    await this.aiImageService.deleteImage(generationId, organizationId);
   }
 
   @Get('monthly/:organizationId/usage')

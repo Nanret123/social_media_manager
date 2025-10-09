@@ -1,7 +1,9 @@
 import {
+  Inject,
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { Platform, ToneType } from '@prisma/client';
 import { BrandKitService } from 'src/brand-kit/brand-kit.service';
@@ -10,6 +12,7 @@ import { GenerateContentDto } from '../dtos/generate-content.dto';
 import { OpenAiProvider } from '../providers/openai.service';
 import { AiUsageService } from './ai-usage.service';
 import { RateLimitService } from 'src/rate-limit/rate-limit.service';
+import { HuggingFaceService } from '../providers/huggingface.provider';
 
 @Injectable()
 export class AiContentService {
@@ -18,9 +21,10 @@ export class AiContentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly brandKitService: BrandKitService,
-    private readonly openAiProvider: OpenAiProvider,
+    //private readonly openAiProvider: OpenAiProvider,
     private readonly aiUsageService: AiUsageService,
     private readonly rateLimitService: RateLimitService,
+    private readonly huggingFaceClient: HuggingFaceService,
   ) {}
 
   async generateContent(
@@ -31,7 +35,7 @@ export class AiContentService {
     const start = Date.now();
 
     try {
-      // 1. Rate limits
+      // 1. Rate limit
       await this.rateLimitService.checkLimit(
         'AI',
         organizationId,
@@ -46,15 +50,19 @@ export class AiContentService {
       // 3. Prompt
       const prompt = this.buildEnhancedPrompt(generateDto, brandKit);
 
-      // 4. Call AI
-      const result = await this.openAiProvider.generateText(prompt);
-      const { content, hashtags } = this.parseAiResponse(result);
+      // 4. Call AI (Hugging Face)
+      const result = await this.huggingFaceClient.generateText(prompt);
 
-      // 5. Costs & credits
-      const tokens = result.usage.total_tokens;
+      // 5. Clean & parse response
+      const { content, hashtags, engagement_hook } = this.cleanAndParseResponse(
+        result.choices[0]?.message?.content || '',
+      );
+
+      // 6. Costs & credits
+      const tokens = result.usage?.total_tokens ?? 0;
       const { cost, credits } = this.calculateUsage(tokens);
 
-      // 6. Save record
+      // 7. Save record
       const generation = await this.prisma.aiContentGeneration.create({
         data: {
           organizationId,
@@ -68,13 +76,13 @@ export class AiContentService {
           generatedText: content,
           hashtags,
           cost,
-          provider: 'openai',
+          provider: 'huggingface',
           model: result.model,
           brandKitId: brandKit.id !== 'default' ? brandKit.id : null,
         },
       });
 
-      // 7. Track usage
+      // 8. Track usage
       await this.aiUsageService.trackUsage({
         organizationId,
         userId,
@@ -94,7 +102,16 @@ export class AiContentService {
         }ms`,
       );
 
-      return generation;
+      // 9. Return cleaned, presentable result
+      return {
+        id: generation.id,
+        content,
+        hashtags,
+        engagement_hook,
+        provider: result.model,
+        creditsUsed: credits,
+        cost,
+      };
     } catch (err) {
       this.logger.error(
         `❌ Content generation failed for org=${organizationId}, user=${userId}`,
@@ -107,7 +124,7 @@ export class AiContentService {
   }
 
   async enhanceContent(
-    content: string,
+    contentId: string,
     options: {
       platform: Platform;
       tone: ToneType;
@@ -121,6 +138,17 @@ export class AiContentService {
     const start = Date.now();
 
     try {
+      // 1️⃣ Fetch the existing content
+      const existing = await this.prisma.aiContentGeneration.findUnique({
+        where: { id: contentId },
+      });
+
+      if (!existing) {
+        throw new NotFoundException(
+          `Generated content not found: ${contentId}`,
+        );
+      }
+
       const prompt = `
         Enhance the following content for ${options.platform}.
         
@@ -131,18 +159,38 @@ export class AiContentService {
         ${this.buildBrandContext(options.brandKit)}
 
         CONTENT TO ENHANCE:
-        """${content}"""
+        """${existing.generatedText}"""
 
         Return response in JSON format:
         { "content": "...", "hashtags": ["#tag1", "#tag2"] }
       `;
 
-      const result = await this.openAiProvider.generateText(prompt);
-      const { content: enhancedContent, hashtags } =
-        this.parseAiResponse(result);
+      //const result = await this.openAiProvider.generateText(prompt);
+      const result = await this.huggingFaceClient.generateText(prompt);
+      // const { content: enhancedContent, hashtags } =
+      //this.parseAiResponse(result);
+      const {
+        content: enhancedContent,
+        hashtags,
+        engagement_hook,
+      } = this.cleanAndParseResponse(result.choices[0]?.message?.content || '');
 
       const tokens = result.usage.total_tokens;
       const { cost, credits } = this.calculateUsage(tokens);
+
+      // 4️⃣ Update the existing record with enhanced version
+    await this.prisma.aiContentGeneration.update({
+      where: { id: contentId },
+      data: {
+        generatedText: enhancedContent,
+        hashtags,
+        cost: existing.cost + cost, // accumulate total cost
+        creditsUsed: existing.creditsUsed + credits, // accumulate credits
+        updatedAt: new Date(),
+        model: result.model,
+        provider: 'huggingface',
+      },
+    });
 
       if (trackUsage) {
         await this.aiUsageService.trackUsage({
@@ -236,17 +284,17 @@ export class AiContentService {
     return parts.join('\n');
   }
 
-  private parseAiResponse(result: any): {
-    content: string;
-    hashtags: string[];
-  } {
-    try {
-      const parsed = JSON.parse(result.choices[0].message.content);
-      return { content: parsed.content, hashtags: parsed.hashtags || [] };
-    } catch {
-      return { content: result.choices[0].message.content, hashtags: [] };
-    }
-  }
+  // private parseAiResponse(result: any): {
+  //   content: string;
+  //   hashtags: string[];
+  // } {
+  //   try {
+  //     const parsed = JSON.parse(result.choices[0].message.content);
+  //     return { content: parsed.content, hashtags: parsed.hashtags || [] };
+  //   } catch {
+  //     return { content: result.choices[0].message.content, hashtags: [] };
+  //   }
+  // }
 
   private calculateUsage(tokens: number): { cost: number; credits: number } {
     const cost = (tokens / 1000) * 0.02; // GPT-4 pricing
@@ -284,5 +332,67 @@ export class AiContentService {
       WITTY: 'Witty and humorous',
     };
     return map[tone] || tone;
+  }
+
+  private cleanAndParseResponse(generatedText: string): {
+    content: string;
+    hashtags: string[];
+    engagement_hook: string;
+    raw?: string;
+  } {
+    if (!generatedText?.trim()) {
+      return { content: '', hashtags: [], engagement_hook: '', raw: '' };
+    }
+
+    try {
+      const cleaned = generatedText.replace(/```(?:json)?/g, '').trim();
+
+      const parsed = JSON.parse(cleaned);
+
+      return {
+        content: this.sanitizeContent(
+          parsed.content ?? parsed.text ?? parsed.response ?? '',
+        ),
+        hashtags: this.extractHashtags(parsed.hashtags ?? parsed.tags ?? []),
+        engagement_hook:
+          parsed.engagement_hook ?? parsed.hook ?? parsed.engagement ?? '',
+        raw: cleaned,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `⚠️ Failed to parse AI response as JSON. Returning raw text. Error: ${error.message}`,
+      );
+
+      const hashtags = this.extractHashtagsFromText(generatedText);
+      const content = generatedText.replace(/#\w+/g, '').trim();
+
+      return { content, hashtags, engagement_hook: '', raw: generatedText };
+    }
+  }
+
+  private sanitizeContent(content: any): string {
+    if (typeof content === 'string') {
+      return content.trim();
+    }
+    if (typeof content === 'number' || typeof content === 'boolean') {
+      return content.toString();
+    }
+    return '';
+  }
+
+  private extractHashtags(hashtags: any): string[] {
+    if (Array.isArray(hashtags)) {
+      return hashtags
+        .filter((tag) => typeof tag === 'string')
+        .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`))
+        .slice(0, 10); // Limit to 10 hashtags
+    }
+    return [];
+  }
+
+  private extractHashtagsFromText(text: string): string[] {
+    const hashtagRegex = /#\w+/g;
+    const matches = text.match(hashtagRegex) || [];
+    return matches.slice(0, 10); // Limit to 10 hashtags
   }
 }

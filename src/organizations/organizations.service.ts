@@ -10,6 +10,7 @@ import { UpdateOrganizationDto } from './dtos/update-organization.dto';
 import { OrganizationUsageDto } from './dtos/organization-usage.dto';
 import { OrganizationStatsDto } from './dtos/organization-stats.dto';
 import { GetAllOrganizationsDto } from './dtos/get-organiations.dto';
+import { GetOrganizationMediaDto } from './dtos/get-organization-media.dto';
 
 @Injectable()
 export class OrganizationsService {
@@ -103,8 +104,12 @@ export class OrganizationsService {
     return membership.organization;
   }
 
-   async getAllOrganizations(dto: GetAllOrganizationsDto) {
-    const { name, isActive, planTier, planStatus, skip = 0, take = 20 } = dto;
+  async getAllOrganizations(dto: GetAllOrganizationsDto) {
+    const { name, isActive, planTier, planStatus, page, limit } = dto;
+
+    // Calculate pagination offsets
+    const skip = (page - 1) * limit;
+    const take = limit;
 
     const where: any = {};
 
@@ -127,7 +132,7 @@ export class OrganizationsService {
     orgId: string,
     userId: string,
     dto: UpdateOrganizationDto,
-  ) {;
+  ) {
     await this.verifyOwnership(orgId, userId);
 
     return this.prisma.organization.update({
@@ -268,6 +273,39 @@ export class OrganizationsService {
     });
 
     return memberCount < organization.maxMembers;
+  }
+
+  async getAllOrganizationMedia(
+    organizationId: string,
+    query: GetOrganizationMediaDto,
+  ) {
+    const { page = 1, limit = 20, type, search } = query;
+    const skip = (page - 1) * limit;
+
+    const where: any = { organizationId };
+
+    if (type) where.mimeType = { startsWith: type }; // e.g. "image" or "video"
+    if (search) where.originalName = { contains: search, mode: 'insensitive' };
+
+    const [data, total] = await Promise.all([
+      this.prisma.mediaFile.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.mediaFile.count({ where }),
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   private async verifyOwnership(orgId: string, userId: string) {

@@ -4,10 +4,10 @@ import { Platform, ToneType } from '@prisma/client';
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class EnhanceContentDto {
-  @ApiProperty({ example: '🚀 Boost your brand visibility with these tips...' })
+  @ApiProperty({ example: 'cmggo07ws0001iamsrcw4mzpe' })
   @IsString()
   @IsNotEmpty()
-  content: string;
+  contentId: string;
 
   @ApiProperty({ example: 'INSTAGRAM' })
   @IsString()

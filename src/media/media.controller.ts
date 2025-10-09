@@ -10,7 +10,7 @@ import {
   Param,
   Query,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiConsumes, ApiBody, ApiResponse } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { MediaService } from './media.service';
 import { SaveGeneratedMediaDto } from './dto/save-generated-media.dto';
@@ -22,16 +22,40 @@ import { UploadMultipleFilesDto } from './dto/upload-multiple-files.dto';
 export class MediaController {
   constructor(private readonly mediaService: MediaService) {}
 
-  @Post('upload')
-  @ApiOperation({ summary: 'Upload a single media file' })
-  @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
-  async uploadFile(
-    @UploadedFile() file: Express.Multer.File,
-    @Body() dto: UploadFileDto,
-  ) {
-    return this.mediaService.uploadFile(dto.userId, dto.organizationId, file);
-  }
+
+@ApiOperation({ summary: 'Upload a file (with Cloudinary)' })
+@ApiConsumes('multipart/form-data')
+@ApiBody({
+  description: 'Upload file with optional user/org context',
+  type: UploadFileDto,
+})
+@ApiResponse({
+  status: 200,
+  description: 'File uploaded successfully',
+  schema: {
+    example: {
+      url: 'https://res.cloudinary.com/demo/image/upload/sample.jpg',
+      publicId: 'sample_abc123',
+    },
+  },
+})
+@Post('upload')
+@UseInterceptors(FileInterceptor('file'))
+async uploadFile(
+  @UploadedFile() file: Express.Multer.File,
+  @Body() dto: UploadFileDto,
+) {
+  const result = await this.mediaService.uploadFile(
+    dto?.userId,
+    dto?.organizationId,
+    file,
+  );
+  return {
+    url: result.secure_url,
+    publicId: result.public_id,
+  };
+}
+
 
   @Post('upload/multiple')
   @ApiOperation({ summary: 'Upload multiple media files' })
@@ -46,22 +70,6 @@ export class MediaController {
       dto.userId,
       dto.organizationId,
     );
-  }
-
-  @Post('save-generated')
-  @ApiOperation({ summary: 'Save an already-uploaded AI-generated media' })
-  async saveGeneratedMedia(@Body() dto: SaveGeneratedMediaDto) {
-    return this.mediaService.saveGeneratedMedia(dto);
-  }
-
-  @Get('ai-generated')
-  @ApiOperation({ summary: 'Get paginated AI-generated media' })
-  async getAIGeneratedMedia(
-    @Query('organizationId') organizationId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
-    return this.mediaService.getAIGeneratedMedia(organizationId, page, limit);
   }
 
   @Delete(':fileId')

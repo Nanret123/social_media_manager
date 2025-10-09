@@ -9,6 +9,7 @@ import { StableDiffusionProvider } from './providers/stable-diffusion.service';
 import { BrandKitModule } from 'src/brand-kit/brand-kit.module';
 import { RateLimitModule } from 'src/rate-limit/rate-limit.module';
 import { MediaModule } from 'src/media/media.module';
+import { HuggingFaceService} from './providers/huggingface.provider';
 
 
 @Module({
@@ -19,7 +20,7 @@ import { MediaModule } from 'src/media/media.module';
     AiUsageService,
     OpenAiProvider,
     StableDiffusionProvider,
-    PrismaService,],
+    HuggingFaceService],
   exports: [AiContentService, AiImageService, AiUsageService],
 })
 export class AiModule {}

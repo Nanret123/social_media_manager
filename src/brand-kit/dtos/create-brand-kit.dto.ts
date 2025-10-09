@@ -46,18 +46,9 @@ export class CreateBrandKitDto {
   tone?: string;
 
   @ApiPropertyOptional({
-    description: 'Social media handles',
-    example: { twitter: '@brand', instagram: '@brand' },
-  })
-  @IsOptional()
-  @IsObject()
-  socialHandles?: Record<string, string>;
-
-  @ApiPropertyOptional({
     description: 'Brand guidelines and key messaging',
     example: {
       keyMessaging: ['Innovative', 'Reliable'],
-      targetAudience: 'Young adults',
     },
   })
   @IsOptional()
@@ -73,4 +64,3 @@ export class CreateBrandKitDto {
   isDefault?: boolean;
 }
 
-export class UpdateBrandKitDto extends CreateBrandKitDto {}

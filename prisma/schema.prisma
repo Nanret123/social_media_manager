@@ -46,18 +46,18 @@ model User {
 
   sentInvitations OrganizationInvitation[] @relation("UserSentInvitations")
 
-  aiContentGenerations AiContentGeneration[]
-  aiImageGenerations   AiImageGeneration[]
-  messages             Message[]
-  notifications        NotificationEntity[]
-  ContentTemplate      ContentTemplate[]
-  Post                 Post[]
-  approvalsRequested   PostApproval[]         @relation("ApprovalRequester")
-  approvalsGiven       PostApproval[]         @relation("ApprovalApprover")
-  auditLogs            AuditLog[]
-  aiUsages             AIUsage[]
-  favoriteTemplates    UserFavoriteTemplate[]
-  conversationParticipants ConversationParticipant[] 
+  aiContentGenerations     AiContentGeneration[]
+  aiImageGenerations       AiImageGeneration[]
+  messages                 Message[]
+  notifications            NotificationEntity[]
+  ContentTemplate          ContentTemplate[]
+  Post                     Post[]
+  approvalsRequested       PostApproval[]            @relation("ApprovalRequester")
+  approvalsGiven           PostApproval[]            @relation("ApprovalApprover")
+  auditLogs                AuditLog[]
+  aiUsages                 AIUsage[]
+  favoriteTemplates        UserFavoriteTemplate[]
+  conversationParticipants ConversationParticipant[]
 
   socialAccountMemberships SocialAccountMember[] @relation("SocialAccountMemberships")
   invitedSocialMembers     SocialAccountMember[] @relation("SocialAccountInvitations")
@@ -89,7 +89,7 @@ model SocialAccount {
 
   scopes       String[]
   lastPostedAt DateTime?
-   metadata          Json?  
+  metadata     Json?
 
   organization     Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   posts            Post[]
@@ -97,9 +97,9 @@ model SocialAccount {
   EngagementMetric EngagementMetric[]
   members          SocialAccountMember[]
 
-  accountType SocialAccountType @default(PAGE) // PAGE or PROFILE
+  accountType   SocialAccountType    @default(PAGE) // PAGE or PROFILE
   notifications NotificationEntity[]
-  conversations  Conversation[]
+  conversations Conversation[]
 
   @@unique([organizationId, platform, platformAccountId])
   @@index([platform, isActive])
@@ -112,7 +112,7 @@ model Post {
   authorId        String?
   socialAccountId String
   content         String
-  mediaFileIds       String[]
+  mediaFileIds    String[]
   scheduledAt     DateTime?
   publishedAt     DateTime?
   requesterId     String?
@@ -128,7 +128,7 @@ model Post {
   maxRetries Int @default(3)
 
   // RELATIONS
-  author        User?            @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  author        User?           @relation(fields: [authorId], references: [id], onDelete: Cascade)
   socialAccount SocialAccount   @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
   approvals     PostApproval[]
   analytics     PostAnalytics[]
@@ -167,7 +167,6 @@ model PublishingMetric {
 
   @@index([organizationId, platform, timestamp])
 }
-
 
 model MediaFile {
   id                  String    @id @default(cuid())
@@ -252,22 +251,20 @@ model Organization {
 }
 
 model OrganizationMember {
-  id             String           @id @default(cuid())
+  id             String   @id @default(cuid())
   organizationId String
   userId         String
   roleId         String
   invitedBy      String?
-  joinedAt       DateTime         @default(now())
-  isActive       Boolean          @default(true) // Soft delete flag
+  joinedAt       DateTime @default(now())
+  isActive       Boolean  @default(true) // Soft delete flag
 
   permissions  Json?
   lastActiveAt DateTime?
 
-
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation("UserOrganizationMemberships", fields: [userId], references: [id], onDelete: Cascade)
   role         Role         @relation(fields: [roleId], references: [id])
-
 
   @@unique([organizationId, userId])
   @@index([userId, isActive])
@@ -318,6 +315,7 @@ model AiContentGeneration {
   provider  String
   model     String
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -338,7 +336,6 @@ model AiImageGeneration {
   userId         String
   prompt         String           @db.Text
   creditsUsed    Int
-  status         GenerationStatus @default(PENDING)
   imageUrl       String?
   publicId       String?
   revisedPrompt  String?          @db.Text
@@ -346,6 +343,7 @@ model AiImageGeneration {
   provider       String
   model          String
   createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @default(now())
 
   mediaFiles MediaFile[]
 
@@ -370,6 +368,7 @@ model AIUsage {
   cost           Float
   metadata       Json?
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -379,45 +378,45 @@ model AIUsage {
 
 // Conversation = a thread of messages with a user on a platform
 model Conversation {
-  id                 String        @id @default(cuid())
+  id                 String    @id @default(cuid())
   organizationId     String
   platform           Platform
   externalId         String
   subject            String?
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
   lastMessageAt      DateTime?
   lastMessagePreview String?
-  unreadCount        Int           @default(0)
+  unreadCount        Int       @default(0)
   externalUserId     String
   externalUsername   String?
   tags               String[]
   // ADD: Social account context for permission checks
   socialAccountId    String?
-  
-  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  socialAccount   SocialAccount? @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
-  messages        Message[]
+
+  organization  Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount?            @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  messages      Message[]
   // ADD: Track participants for efficient notification targeting
-  participants    ConversationParticipant[]
+  participants  ConversationParticipant[]
 
   @@unique([organizationId, platform, externalId])
   @@index([socialAccountId]) // ADD
-  @@index([lastMessageAt])   // ADD for sorting
+  @@index([lastMessageAt]) // ADD for sorting
   @@index([platform, organizationId]) // ADD
 }
 
 // NEW: Track conversation participants
 model ConversationParticipant {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   conversationId String
   userId         String
-  joinedAt       DateTime @default(now())
+  joinedAt       DateTime  @default(now())
   lastReadAt     DateTime? // For read receipts
-  
+
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
   @@unique([conversationId, userId])
   @@index([userId])
 }
@@ -433,8 +432,8 @@ model Message {
   sentAt         DateTime
   createdAt      DateTime      @default(now())
 
-  conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       User?          @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  conversation  Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender        User?                @relation(fields: [senderId], references: [id], onDelete: SetNull)
   notifications NotificationEntity[]
 
   // ADD indexes for efficient querying
@@ -664,25 +663,25 @@ model PostApproval {
 }
 
 model NotificationEntity {
-  id             String               @id @default(cuid())
-  userId         String
-  organizationId String
-  type           NotificationType
+  id              String               @id @default(cuid())
+  userId          String
+  organizationId  String
+  type            NotificationType
   socialAccountId String?
-  title          String
-  content        String
-  data           Json? // Flexible data storage
-  priority       NotificationPriority @default(NORMAL)
-  read           Boolean              @default(false)
-  readAt       DateTime?
-  expiresAt      DateTime? // Auto-cleanup of old notifications
-  createdAt      DateTime             @default(now())
+  title           String
+  content         String
+  data            Json? // Flexible data storage
+  priority        NotificationPriority @default(NORMAL)
+  read            Boolean              @default(false)
+  readAt          DateTime?
+  expiresAt       DateTime? // Auto-cleanup of old notifications
+  createdAt       DateTime             @default(now())
 
   // Relations
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  message      Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
-  post         Post?        @relation(fields: [postId], references: [id], onDelete: SetNull)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  message       Message?       @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  post          Post?          @relation(fields: [postId], references: [id], onDelete: SetNull)
   socialAccount SocialAccount? @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
 
   // Optional references
@@ -744,15 +743,12 @@ model BrandKit {
   tone       String? // Could use enum or free text
   guidelines Json? // Additional brand guidelines
 
-  // Social identity
-  socialHandles Json? // { twitter: "@company", instagram: "@company" }
 
   // Status
   isActive  Boolean   @default(true)
   isDefault Boolean   @default(false) // Mark as default brand kit
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
 
   // Relations
   organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -760,7 +756,6 @@ model BrandKit {
   aiImageGenerations   AiImageGeneration[]
   ContentTemplate      ContentTemplate[]
 
-  @@unique([organizationId, isActive], map: "one_active_brandkit_per_org")
   @@index([organizationId])
   @@index([isActive])
 }
@@ -892,20 +887,20 @@ enum SocialAccountRole {
 }
 
 model SocialAccountMember {
-  id              String            @id @default(cuid())
+  id              String   @id @default(cuid())
   socialAccountId String
   userId          String
   invitedBy       String?
-   roleId        String
-  joinedAt        DateTime          @default(now())
-  isActive        Boolean           @default(true)
-
+  roleId          String
+  joinedAt        DateTime @default(now())
+  isActive        Boolean  @default(true)
 
   // Relations
   socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
   role          Role          @relation(fields: [roleId], references: [id])
   user          User          @relation("SocialAccountMemberships", fields: [userId], references: [id], onDelete: Cascade)
   inviter       User?         @relation("SocialAccountInvitations", fields: [invitedBy], references: [id], onDelete: SetNull)
+
   @@unique([socialAccountId, userId])
   @@index([userId, isActive])
 }
@@ -914,8 +909,6 @@ enum SocialAccountType {
   PAGE
   PROFILE
 }
-
-
 
 model Permission {
   id          String             @id @default(cuid())
@@ -944,8 +937,8 @@ model Role {
   updatedAt   DateTime @updatedAt
 
   // Relations
-  permissions         RolePermission[]
-  organizationMembers OrganizationMember[]
+  permissions          RolePermission[]
+  organizationMembers  OrganizationMember[]
   socialAccountMembers SocialAccountMember[]
 
   @@index([isSystem, isDefault])
@@ -1110,7 +1103,6 @@ enum AspectRatio {
   VERTICAL  @map("9:16")
 }
 
-
 enum ReportType {
   ENGAGEMENT
   PERFORMANCE
@@ -1184,7 +1176,7 @@ enum GenerationStatus {
 }
 
 enum PermissionScope {
-  ORGANIZATION  // Organization-wide permissions
+  ORGANIZATION // Organization-wide permissions
   SOCIAL_ACCOUNT // Social account-specific permissions
 }
 
@@ -1194,20 +1186,20 @@ enum PermissionResource {
   MEMBERS
   BILLING
   SETTINGS
-  
+
   // Social media resources
   POSTS
   CONTENT
   SCHEDULING
   ANALYTICS
   DMS
-  
+
   // AI & Content resources
   AI_GENERATION
   MEDIA_FILES
   TEMPLATES
   BRAND_KIT
-  
+
   // Team resources
   INVITATIONS
   AUDIT_LOGS

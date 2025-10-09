@@ -24,6 +24,7 @@ import {
 import { OrganizationUsageDto } from './dtos/organization-usage.dto';
 import { OrganizationStatsDto } from './dtos/organization-stats.dto';
 import { GetAllOrganizationsDto } from './dtos/get-organiations.dto';
+import { GetOrganizationMediaDto } from './dtos/get-organization-media.dto';
 
 @ApiTags('Organizations')
 @ApiBearerAuth()
@@ -63,6 +64,15 @@ export class OrganizationsController {
   @ApiOkResponse({ description: 'List of organizations' })
   async getAll(@Query() query: GetAllOrganizationsDto) {
     return this.organizationsService.getAllOrganizations(query);
+  }
+
+    @Get()
+  @ApiOperation({ summary: 'Get all media files for an organization' })
+  async getAllOrganizationMedia(
+    @Param('orgId') orgId: string,
+    @Query() query: GetOrganizationMediaDto,
+  ) {
+    return this.organizationsService.getAllOrganizationMedia(orgId, query);
   }
 
   @Get(':id')

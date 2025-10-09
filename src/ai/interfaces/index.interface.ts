@@ -13,3 +13,7 @@ export interface ContentOptimization {
   improvements: string[];
   score: number;
 }
+
+export interface HuggingFaceClient {
+  generateText(prompt: string);
+}

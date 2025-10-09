@@ -1,5 +1,5 @@
 // src/ai/dtos/generate-image.dto.ts
-import { IsString, IsOptional, IsEnum } from 'class-validator';
+import { IsString, IsOptional, IsEnum, maxLength, MaxLength } from 'class-validator';
 import { Platform } from '@prisma/client';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -9,6 +9,7 @@ export class GenerateImageDto {
     example: 'A futuristic city skyline at sunset',
   })
   @IsString()
+   @MaxLength(1000, { message: 'Prompt is too long. Maximum length is 1000 characters.' })
   prompt: string;
 
   @ApiPropertyOptional({
@@ -37,4 +38,12 @@ export class GenerateImageDto {
   @IsOptional()
   @IsString()
   aspectRatio?: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional model ID to use for image generation (defaults to stable-diffusion)',
+    example: 'stabilityai/stable-diffusion-xl-base-1.0',
+  })
+  @IsOptional()
+  @IsString()
+  model?: string;
 }

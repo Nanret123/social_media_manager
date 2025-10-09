@@ -123,51 +123,6 @@ export class MediaService {
   }
 
   /**
-   * Save already-uploaded/generated media
-   */
-  async saveGeneratedMedia(params: {
-    userId: string;
-    organizationId: string;
-    url: string;
-    publicId: string;
-    filename?: string;
-    originalName?: string;
-    mimeType?: string;
-    size?: number;
-    aiGenerationId?: string;
-    aiGenerationContext?: any;
-  }) {
-    const {
-      userId,
-      organizationId,
-      url,
-      publicId,
-      filename,
-      originalName,
-      mimeType,
-      size,
-      aiGenerationId,
-      aiGenerationContext,
-    } = params;
-
-    return this.prisma.mediaFile.create({
-      data: {
-        userId,
-        organizationId,
-        filename: filename ?? publicId.split('/').pop(),
-        originalName: originalName ?? filename ?? publicId.split('/').pop(),
-        mimeType: mimeType ?? 'image/jpeg',
-        size: size ?? 0,
-        url,
-        publicId,
-        isAIGenerated: !!aiGenerationId,
-        aiGenerationContext: aiGenerationContext ?? null,
-        aiGenerationId: aiGenerationId ?? null,
-      },
-    });
-  }
-
-  /**
    * Delete file from Cloudinary + DB
    */
   async deleteFile(fileId: string) {
@@ -192,20 +147,6 @@ export class MediaService {
     }
 
     return this.prisma.mediaFile.delete({ where: { id: fileId } });
-  }
-
-  /**
-   * Paginated AI-generated media
-   */
-  async getAIGeneratedMedia(organizationId: string, page = 1, limit = 20) {
-    const skip = (page - 1) * limit;
-
-    return this.prisma.mediaFile.findMany({
-      where: { organizationId, isAIGenerated: true },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-    });
   }
 
   /**

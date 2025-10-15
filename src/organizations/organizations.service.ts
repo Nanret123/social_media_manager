@@ -74,11 +74,10 @@ export class OrganizationsService {
     });
   }
 
-  async getOrganization(orgId: string, userId: string) {
+  async getOrganization(orgId: string) {
     const membership = await this.prisma.organizationMember.findFirst({
       where: {
         organizationId: orgId,
-        userId: userId,
         isActive: true,
       },
       include: {

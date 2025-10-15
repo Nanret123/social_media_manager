@@ -17,6 +17,7 @@ export interface OAuthState {
   organizationId: string;
   userId: string;
   redirectUri?: string;
+  timestamp?: number;
 }
 
 
@@ -40,9 +41,4 @@ export interface PlatformService {
    * Get required OAuth scopes for this platform
    */
   getRequiredScopes(): string[];
-
-  /**
-   * Platform-specific API base URL
-   */
-  getApiBaseUrl(): string;
 }

@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ArrayNotEmpty, IsArray, IsString } from 'class-validator';
+import { IsArray, ArrayNotEmpty, IsString } from 'class-validator';
 
-export class UploadMultipleFilesDto {
+export class DeleteMultipleFilesDto {
   @ApiProperty({
     description: 'List of file IDs to delete',
     example: ['file123', 'file456'],

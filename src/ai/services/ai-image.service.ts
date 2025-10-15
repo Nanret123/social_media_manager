@@ -7,11 +7,11 @@ import {
 import { AiUsageService } from './ai-usage.service';
 import { GenerateImageDto } from '../dtos/generate-image.dto';
 import { BrandKitService } from 'src/brand-kit/brand-kit.service';
-import { CloudinaryService } from 'src/media/cloudinary.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { StableDiffusionProvider } from 'src/ai/providers/stable-diffusion.service';
 import { HuggingFaceService } from '../providers/huggingface.provider';
 import * as cuid from 'cuid';
+import { v2 as cloudinary } from 'cloudinary';
 
 @Injectable()
 export class AiImageService {
@@ -22,7 +22,6 @@ export class AiImageService {
     private readonly brandKitService: BrandKitService,
     private readonly stableDiffusionProvider: StableDiffusionProvider,
     private readonly aiUsageService: AiUsageService,
-    private readonly cloudinary: CloudinaryService,
     private readonly huggingFaceService: HuggingFaceService,
   ) {}
 
@@ -55,11 +54,12 @@ export class AiImageService {
       }
 
       // 4️⃣ Upload to Cloudinary
-      const publicId = `ai-images/${generationId}`;
-      const uploaded = await this.cloudinary.uploadFromUrl(
-        result.imageUrl,
-        publicId,
-      );
+      const uploaded = await cloudinary.uploader.upload(result.imageUrl, {
+        folder: `org_${organizationId}`,
+        resource_type: 'image',
+        public_id: `${generationId}`,
+      });
+
 
       // 5️⃣ Save generation record
       const generation = await this.prisma.aiImageGeneration.create({
@@ -118,39 +118,6 @@ export class AiImageService {
     } catch (error) {
       this.logger.error('❌ AI image generation failed', error.stack || error);
       throw new Error(`Image generation failed: ${error.message}`);
-    }
-  }
-
-  /**
-   * Delete AI-generated image from Cloudinary + DB
-   */
-  async deleteImage(generationId: string, orgId: string) {
-    const generation = await this.prisma.aiImageGeneration.findUnique({
-      where: { id: generationId },
-    });
-
-    if (!generation || generation.organizationId !== orgId) {
-      throw new NotFoundException('Image generation not found');
-    }
-
-    try {
-      // Delete from Cloudinary
-      await this.cloudinary.deleteImage(generation.publicId);
-
-      // Delete associated mediaFile
-      await this.prisma.mediaFile.deleteMany({
-        where: { aiGenerationId: generationId },
-      });
-
-      // Delete generation record
-      await this.prisma.aiImageGeneration.delete({
-        where: { id: generationId },
-      });
-
-      this.logger.log(`🗑️ Deleted AI image ${generationId} for org ${orgId}`);
-    } catch (error) {
-      this.logger.error('❌ Failed to delete AI image', error.stack || error);
-      throw new Error(`Failed to delete image: ${error.message}`);
     }
   }
 

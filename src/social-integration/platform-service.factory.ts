@@ -6,7 +6,6 @@ import {
   PlatformUser,
 } from './interfaces/platform-service.interface';
 import { LinkedInService } from './platforms/linkedin.service';
-import { MetaService } from './platforms/meta.service';
 import { XService } from './platforms/x.service';
 
 @Injectable()
@@ -15,7 +14,6 @@ export class PlatformServiceFactory {
   private readonly platformServices: Map<Platform, PlatformService>;
 
   constructor(
-    private readonly metaService: MetaService,
     private readonly xService: XService,
     private readonly linkedinService: LinkedInService,
   ) {
@@ -25,8 +23,6 @@ export class PlatformServiceFactory {
 
   private initializeServices(): void {
     // Map each platform to its respective service
-    this.platformServices.set(Platform.INSTAGRAM, this.metaService);
-    this.platformServices.set(Platform.FACEBOOK, this.metaService);
     this.platformServices.set(Platform.X, this.xService);
     this.platformServices.set(Platform.LINKEDIN, this.linkedinService);
 

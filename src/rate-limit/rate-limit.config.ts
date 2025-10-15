@@ -54,6 +54,7 @@ export const PLATFORM_KEY_MAP: Record<Platform, string> = {
   [Platform.FACEBOOK]: 'facebook',
   [Platform.INSTAGRAM]: 'instagram',
   [Platform.LINKEDIN]: 'linkedin',
+  [Platform.META]: 'meta',
   [Platform.AI]: 'ai',
   [Platform.API]: 'api',
   GENERAL: 'general',

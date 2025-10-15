@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Platform } from '@prisma/client';
 import { SocialAccountService } from 'src/social-account/social-account.service';
 import { PlatformServiceFactory } from './platform-service.factory';
@@ -29,26 +29,24 @@ export class SocialIntegrationService {
     platform: Platform,
     organizationId: string,
     userId: string,
+    redirectUri?: string,
   ): Promise<string> {
     // Check account limit before initiating OAuth
     const hasReachedLimit =
       await this.socialAccountService.hasReachedAccountLimit(organizationId);
     if (hasReachedLimit) {
-      throw new Error('Organization has reached maximum social account limit');
+      throw new BadRequestException(
+        'Organization has reached maximum social account limit'
+      );
     }
 
     // Create state token to prevent CSRF
-    const state: OAuthState = { organizationId, userId };
+    const state: OAuthState = { organizationId, userId, redirectUri };
     const encryptedState = await this.encryptionService.encrypt(
       JSON.stringify(state),
     );
 
-    // Platform-specific OAuth configuration
-    if (platform === Platform.X) {
-      return await this.buildXAuthUrl(encryptedState);
-    } else {
-      return await this.buildStandardAuthUrl(platform, encryptedState);
-    }
+    return this.buildAuthUrl(platform, encryptedState);
   }
 
   /**
@@ -59,65 +57,39 @@ export class SocialIntegrationService {
     code: string,
     encryptedState: string,
   ): Promise<{ success: boolean; account: any; redirectUri?: string }> {
+    // Decrypt and verify state
+    const stateData = await this.decryptAndValidateState(encryptedState);
+    const { organizationId, userId } = stateData;
+
+    this.logger.log(`Processing OAuth callback for ${platform}`, {
+      organizationId,
+      userId,
+    });
+
     try {
-      // Decrypt and verify state
-      const decryptedState =
-        await this.encryptionService.decrypt(encryptedState);
-      const stateData: OAuthState = JSON.parse(decryptedState);
-      const { organizationId, userId } = stateData;
-
-      this.logger.log(`Processing OAuth callback for ${platform}`, {
-        organizationId,
-        userId,
-      });
-
-      let tokens: any;
-      let userProfile: any;
-
-      if (platform === Platform.X) {
-        // Use the simplified X OAuth flow
-        const result = await this.handleXOAuthCallback(code, encryptedState);
-        tokens = result.tokens;
-        userProfile = result.userProfile;
-      } else {
-        // Use existing flow for other platforms
-        tokens = await this.exchangeCodeForTokens(platform, code);
-        const platformService =
-          this.platformServiceFactory.getService(platform);
-        userProfile = await platformService.getUserProfile(tokens.access_token);
-      }
-
-      // ENCRYPT tokens before storing
-      const encryptedAccessToken = await this.encryptionService.encrypt(
-        tokens.accessToken || tokens.access_token,
+      const { tokens, userProfile } = await this.processOAuthCallback(
+        platform,
+        code,
+        encryptedState,
       );
-      const encryptedRefreshToken =
-        tokens.refreshToken || tokens.refresh_token
-          ? await this.encryptionService.encrypt(
-              tokens.refreshToken || tokens.refresh_token,
-            )
-          : null;
 
-      // Calculate expiration
-      const tokenExpiresAt = tokens.expiresIn
-        ? new Date(Date.now() + tokens.expiresIn * 1000).toISOString()
-        : tokens.expires_at
-          ? new Date(tokens.expires_at * 1000).toISOString()
-          : undefined;
+      // Encrypt tokens before storing
+      const encryptedTokens = await this.encryptTokens(tokens);
 
-      const accountData: any = {
+      // Calculate token expiration
+      const tokenExpiresAt = this.calculateTokenExpiration(tokens);
+
+      const accountData = {
         organizationId,
         platform,
         platformAccountId: userProfile.id,
         username: userProfile.username,
         name: userProfile.name,
         profilePicture: userProfile.profilePicture,
-        accessToken: encryptedAccessToken,
-        refreshToken: encryptedRefreshToken,
-        tokenExpiresAt,
-        scopes: tokens.scope
-          ? tokens.scope.split(',')
-          : this.getPlatformScopes(platform).split(' '),
+        accessToken: encryptedTokens.accessToken,
+        refreshToken: encryptedTokens.refreshToken,
+        tokenExpiresAt: tokenExpiresAt.toISOString(),
+        scopes: this.normalizeScopes(tokens.scope, platform),
         metadata: userProfile.metadata,
       };
 
@@ -126,8 +98,8 @@ export class SocialIntegrationService {
         await this.socialAccountService.upsertSocialAccount(accountData);
 
       this.logger.log(
-        `Successfully connected ${platform} account ${userProfile.username} to organization ${organizationId}`,
-        { accountId: socialAccount.id },
+        `Successfully connected ${platform} account ${userProfile.username}`,
+        { accountId: socialAccount.id, organizationId }
       );
 
       return {
@@ -137,14 +109,182 @@ export class SocialIntegrationService {
       };
     } catch (error) {
       this.logger.error(`OAuth callback failed for ${platform}:`, error);
-      throw error; // Don't wrap, keep original error message
+      throw new UnauthorizedException(
+        `Failed to connect ${platform} account: ${error.message}`
+      );
     }
   }
 
   /**
-   * Simplified X OAuth callback handling
+   * Get user profile for a connected account
    */
-  private async handleXOAuthCallback(code: string, encryptedState: string) {
+  async getUserProfile(accountId: string): Promise<any> {
+    const account = await this.socialAccountService.findById(accountId);
+    if (!account) {
+      throw new NotFoundException('Social account not found');
+    }
+
+    const decryptedToken = await this.encryptionService.decrypt(
+      account.accessToken,
+    );
+
+    const platformService = this.platformServiceFactory.getService(
+      account.platform,
+    );
+
+    try {
+      const profile = await platformService.getUserProfile(decryptedToken);
+
+      this.logger.log(
+        `Fetched profile for ${account.platform} account ${account.username}`,
+      );
+
+      return profile;
+    } catch (error) {
+      this.logger.error(`Failed to fetch profile for account ${accountId}:`, error);
+      throw new BadRequestException(
+        'Failed to fetch profile. Token may be invalid.'
+      );
+    }
+  }
+
+  /**
+   * Get all connected accounts for an organization
+   */
+  async getConnectedAccounts(organizationId: string): Promise<any[]> {
+    const accounts =
+      await this.socialAccountService.findByOrganization(organizationId);
+
+    return accounts.map((account) => ({
+      id: account.id,
+      platform: account.platform,
+      accountId: account.platformAccountId,
+      username: account.username,
+      name: account.name,
+      profilePicture: account.profileImage,
+      tokenExpiresAt: account.tokenExpiresAt,
+      scopes: account.scopes,
+      createdAt: account.createdAt,
+      needsReauth: this.needsReauth(account),
+    }));
+  }
+
+  /**
+   * Disconnect a social account
+   */
+  async disconnectAccount(
+    accountId: string,
+    organizationId: string,
+  ): Promise<void> {
+    const account = await this.socialAccountService.findById(accountId);
+
+    if (!account || account.organizationId !== organizationId) {
+      throw new NotFoundException('Social account not found');
+    }
+
+    // Attempt to revoke tokens on the platform side
+    await this.revokeTokens(account);
+
+    // Soft delete the account
+    await this.socialAccountService.disconnect(accountId);
+
+    this.logger.log(
+      `Disconnected ${account.platform} account ${account.username}`,
+      { organizationId }
+    );
+  }
+
+  /**
+   * Get a valid access token for an account (with automatic refresh)
+   */
+  async getValidAccessToken(accountId: string): Promise<string> {
+    const account = await this.socialAccountService.findById(accountId);
+
+    if (!account) {
+      throw new NotFoundException('Social account not found');
+    }
+
+    // Check if token needs refresh
+    if (this.needsTokenRefresh(account)) {
+      this.logger.log(`Refreshing expired token for account ${accountId}`);
+      return await this.refreshAccessToken(accountId);
+    }
+
+    // Decrypt the token before returning it
+    try {
+      return await this.encryptionService.decrypt(account.accessToken);
+    } catch (error) {
+      this.logger.error(
+        `Failed to decrypt token for account ${accountId}:`,
+        error,
+      );
+      throw new UnauthorizedException(
+        'Token decryption failed. Please reconnect your account.'
+      );
+    }
+  }
+
+  // ==================== PRIVATE METHODS ====================
+
+  /**
+   * Decrypt and validate OAuth state
+   */
+  private async decryptAndValidateState(
+    encryptedState: string,
+  ): Promise<OAuthState> {
+    try {
+      const decryptedState =
+        await this.encryptionService.decrypt(encryptedState);
+      const stateData: OAuthState = JSON.parse(decryptedState);
+
+      if (!stateData.organizationId || !stateData.userId) {
+        throw new Error('Invalid state data');
+      }
+
+      return stateData;
+    } catch (error) {
+      this.logger.error('Failed to decrypt OAuth state:', error);
+      throw new UnauthorizedException('Invalid or expired OAuth state');
+    }
+  }
+
+  /**
+   * Process OAuth callback based on platform
+   */
+  private async processOAuthCallback(
+    platform: Platform,
+    code: string,
+    encryptedState: string,
+  ): Promise<{ tokens: any; userProfile: any }> {
+    if (platform === Platform.X) {
+      return await this.handleXOAuthCallback(code, encryptedState);
+    }
+
+    // Standard OAuth flow for other platforms
+    const tokens = await this.exchangeCodeForTokens(platform, code, encryptedState);
+    const platformService = this.platformServiceFactory.getService(platform);
+    const userProfile = await platformService.getUserProfile(
+      tokens.access_token,
+    );
+
+    return {
+      tokens: {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresIn: tokens.expires_in,
+        scope: tokens.scope,
+      },
+      userProfile,
+    };
+  }
+
+  /**
+   * Handle X (Twitter) OAuth callback with PKCE
+   */
+  private async handleXOAuthCallback(
+    code: string,
+    encryptedState: string,
+  ): Promise<{ tokens: any; userProfile: any }> {
     const xService = this.platformServiceFactory.getService(
       Platform.X,
     ) as XService;
@@ -154,67 +294,50 @@ export class SocialIntegrationService {
       `x_pkce:${encryptedState}`,
     );
     if (!codeVerifier) {
-      throw new Error('Missing PKCE verifier. OAuth session may have expired.');
+      throw new UnauthorizedException(
+        'OAuth session expired. Please try again.'
+      );
     }
 
     const redirectUri = this.getRedirectUri(Platform.X);
 
-    // Use the simplified X OAuth flow
-    const oauthResult = await xService.handleOAuthCallback(
-      code,
-      codeVerifier,
-      redirectUri,
-    );
+    try {
+      // Exchange code for tokens using PKCE
+      const oauthResult = await xService.handleOAuthCallback(
+        code,
+        codeVerifier,
+        redirectUri,
+      );
 
-    // Get user profile using the authenticated client
-    const userProfile = await oauthResult.client.v2.me({
-      'user.fields': ['username', 'name', 'profile_image_url'],
-    });
+      // Get user profile using the authenticated client
+      const userProfile = await oauthResult.client.v2.me({
+        'user.fields': ['username', 'name', 'profile_image_url'],
+      });
 
-    // Clean up verifier
-    await this.redisService.del(`x_pkce:${encryptedState}`);
-
-    return {
-      tokens: {
-        accessToken: oauthResult.accessToken,
-        refreshToken: oauthResult.refreshToken,
-        expiresIn: oauthResult.expiresIn,
-      },
-      userProfile: {
-        id: userProfile.data.id,
-        username: userProfile.data.username,
-        name: userProfile.data.name,
-        profilePicture: userProfile.data.profile_image_url,
-        metadata: userProfile.data,
-      },
-    };
-  }
-
-  /**
-   * Build X OAuth URL with automatic PKCE
-   */
-  private async buildXAuthUrl(encryptedState: string): Promise<string> {
-    const xService = this.platformServiceFactory.getService(
-      Platform.X,
-    ) as XService;
-    const redirectUri = this.getRedirectUri(Platform.X);
-
-    const { url, codeVerifier } = await xService.generateAuthUrl(
-      redirectUri,
-      encryptedState,
-    );
-
-    // Store code verifier for later use
-    await this.redisService.set(`x_pkce:${encryptedState}`, codeVerifier, 300); // 5 minutes
-
-    this.logger.debug(`Generated X OAuth URL with PKCE`);
-    return url;
+      return {
+        tokens: {
+          accessToken: oauthResult.accessToken,
+          refreshToken: oauthResult.refreshToken,
+          expiresIn: oauthResult.expiresIn,
+        },
+        userProfile: {
+          id: userProfile.data.id,
+          username: userProfile.data.username,
+          name: userProfile.data.name,
+          profilePicture: userProfile.data.profile_image_url,
+          metadata: userProfile.data,
+        },
+      };
+    } finally {
+      // Always clean up the verifier
+      await this.redisService.del(`x_pkce:${encryptedState}`);
+    }
   }
 
   /**
    * Build standard OAuth URL for other platforms
    */
-  private async buildStandardAuthUrl(
+  private async buildAuthUrl(
     platform: Platform,
     encryptedState: string,
   ): Promise<string> {
@@ -232,14 +355,112 @@ export class SocialIntegrationService {
       state: encryptedState,
     });
 
-    // For Meta platforms, add additional parameters
-    if (platform === Platform.INSTAGRAM || platform === Platform.FACEBOOK) {
-      params.append('config_id', process.env.META_APP_CONFIG_ID || '');
+    // Meta-specific parameters
+    if (
+      (platform === Platform.INSTAGRAM || platform === Platform.FACEBOOK) &&
+      process.env.META_APP_CONFIG_ID
+    ) {
+      params.append('config_id', process.env.META_APP_CONFIG_ID);
     }
 
     const authUrl = `${baseUrls[platform]}?${params.toString()}`;
-    this.logger.debug(`Built OAuth URL for ${platform}: ${authUrl}`);
+    this.logger.debug(`Built OAuth URL for ${platform}`);
     return authUrl;
+  }
+
+  /**
+   * Exchange authorization code for access tokens
+   */
+  private async exchangeCodeForTokens(
+    platform: Platform,
+    code: string,
+    state?: string,
+  ): Promise<any> {
+    const tokenUrl = this.getTokenUrl(platform);
+    const clientId = this.getClientId(platform);
+    const clientSecret = this.getClientSecret(platform);
+    const redirectUri = this.getRedirectUri(platform);
+
+    const bodyParams = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+    });
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    };
+
+    // Platform-specific token exchange
+    if (platform === Platform.X) {
+
+      // bodyParams.append('code_verifier', verifier);
+      bodyParams.append('client_id', clientId);
+
+      // Basic auth for X
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString(
+        'base64',
+      );
+      headers['Authorization'] = `Basic ${credentials}`;
+    } else {
+      bodyParams.append('client_id', clientId);
+      bodyParams.append('client_secret', clientSecret);
+    }
+
+    try {
+      const response = await axios.post(tokenUrl, bodyParams, {
+        headers,
+        timeout: 30000,
+      });
+
+      this.logger.debug(`Token exchange successful for ${platform}`);
+
+      // Normalize Meta platform responses
+      if (platform === Platform.INSTAGRAM || platform === Platform.FACEBOOK) {
+        return {
+          access_token: response.data.access_token,
+          refresh_token: response.data.refresh_token,
+          expires_in: response.data.expires_in,
+          scope: response.data.scope || this.getPlatformScopes(platform),
+          token_type: response.data.token_type,
+        };
+      }
+
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Token exchange failed for ${platform}:`, error);
+      
+      if (axios.isAxiosError(error)) {
+        const errorData = error.response?.data;
+        
+        // Handle platform-specific errors
+        if (platform === Platform.INSTAGRAM || platform === Platform.FACEBOOK) {
+          const errorCode = errorData?.error?.code;
+          if (errorCode === 190) {
+            throw new UnauthorizedException('Session expired. Please reconnect.');
+          }
+          if (errorCode === 100) {
+            throw new BadRequestException(
+              'Missing required permissions. Please grant all requested scopes.'
+            );
+          }
+          if (errorCode === 10) {
+            throw new UnauthorizedException(
+              'Application not authorized. Please check app permissions.'
+            );
+          }
+        }
+
+        const errorMsg =
+          errorData?.error?.message ||
+          errorData?.error_description ||
+          error.message;
+        throw new UnauthorizedException(`Token exchange failed: ${errorMsg}`);
+      }
+
+      throw error;
+    }
   }
 
   /**
@@ -249,60 +470,45 @@ export class SocialIntegrationService {
     const account = await this.socialAccountService.findById(accountId);
 
     if (!account.refreshToken) {
-      throw new Error('No refresh token available');
+      throw new UnauthorizedException('No refresh token available');
     }
 
     try {
-      // DECRYPT refresh token first
+      // Decrypt refresh token
       const decryptedRefreshToken = await this.encryptionService.decrypt(
         account.refreshToken,
       );
 
+      // Platform-specific token refresh
       let newTokens: any;
-
       if (account.platform === Platform.X) {
-        // Use XService for token refresh
         const xService = this.platformServiceFactory.getService(
           Platform.X,
         ) as XService;
         newTokens = await xService.refreshToken(decryptedRefreshToken);
       } else {
-        // Use existing refresh flow for other platforms
         newTokens = await this.refreshTokens(
           account.platform,
           decryptedRefreshToken,
         );
       }
 
-      // ENCRYPT new tokens before storing
-      const encryptedAccessToken = await this.encryptionService.encrypt(
-        newTokens.accessToken || newTokens.access_token,
-      );
-
-      const encryptedRefreshToken =
-        newTokens.refreshToken || newTokens.refresh_token
-          ? await this.encryptionService.encrypt(
-              newTokens.refreshToken || newTokens.refresh_token,
-            )
-          : account.refreshToken; // Keep existing if no new refresh token
+      // Encrypt new tokens
+      const encryptedTokens = await this.encryptTokens(newTokens);
 
       // Calculate new expiration
-      const tokenExpiresAt = newTokens.expiresIn
-        ? new Date(Date.now() + newTokens.expiresIn * 1000).toISOString()
-        : newTokens.expires_at
-          ? new Date(newTokens.expires_at * 1000).toISOString()
-          : undefined;
+      const tokenExpiresAt = this.calculateTokenExpiration(newTokens);
 
-      // Update with ENCRYPTED tokens
+      // Update account with new tokens
       await this.socialAccountService.update(accountId, {
-        accessToken: encryptedAccessToken,
-        refreshToken: encryptedRefreshToken,
-        tokenExpiresAt,
+        accessToken: encryptedTokens.accessToken,
+        refreshToken: encryptedTokens.refreshToken || account.refreshToken,
+        tokenExpiresAt: tokenExpiresAt.toISOString(),
       });
 
       this.logger.log(`Successfully refreshed token for ${account.platform}`);
 
-      // Return DECRYPTED access token for immediate use
+      // Return decrypted access token for immediate use
       return newTokens.accessToken || newTokens.access_token;
     } catch (error) {
       this.logger.error(
@@ -312,126 +518,142 @@ export class SocialIntegrationService {
 
       // Mark account as needing reauthentication
       await this.socialAccountService.disconnect(accountId);
-      throw new Error('Token refresh failed. Please reconnect your account.');
+      throw new UnauthorizedException(
+        'Token refresh failed. Please reconnect your account.'
+      );
     }
-  }
-
-
-  async getUserProfile(accountId: string): Promise<any> {
-    // Fetch account from DB
-    const account = await this.socialAccountService.findById(accountId);
-    if (!account) {
-      throw new NotFoundException('Social account not found');
-    }
-
-    // Decrypt token
-    const decryptedToken = await this.encryptionService.decrypt(
-      account.accessToken,
-    );
-
-    // Call the platform-specific service
-    const platformService = this.platformServiceFactory.getService(
-      account.platform,
-    );
-    const profile = await platformService.getUserProfile(decryptedToken);
-
-    this.logger.log(
-      `Fetched profile for ${account.platform} account ${account.username}`,
-    );
-
-    return profile;
   }
 
   /**
-   * Get all connected accounts for an organization
-   * Now delegates to SocialAccountService
+   * Refresh tokens for non-X platforms
    */
-  async getConnectedAccounts(organizationId: string): Promise<any[]> {
-    const accounts =
-      await this.socialAccountService.findByOrganization(organizationId);
+  private async refreshTokens(
+    platform: Platform,
+    refreshToken: string,
+  ): Promise<any> {
+    const tokenUrl = this.getTokenUrl(platform);
+    const clientId = this.getClientId(platform);
+    const clientSecret = this.getClientSecret(platform);
 
-    return accounts.map((account) => ({
-      id: account.id,
-      platform: account.platform,
-      accountId: account.platformAccountId,
-      username: account.username,
-      name: account.name,
-      profilePicture: account.profileImage,
-      tokenExpiresAt: account.tokenExpiresAt,
-      scopes: account.scopes,
-      createdAt: account.createdAt,
-      needsReauth:
-        account.tokenExpiresAt && account.tokenExpiresAt < new Date(),
-    }));
+    const params = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    });
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(
+        errorData?.error?.message ||
+        errorData?.error_description ||
+        'Token refresh failed'
+      );
+    }
+
+    return await response.json();
   }
 
   /**
-   * Disconnect a social account
-   * Now delegates to SocialAccountService
+   * Revoke platform tokens
    */
-  async disconnectAccount(
-    accountId: string,
-    organizationId: string,
-  ): Promise<void> {
-    const account = await this.socialAccountService.findById(accountId);
-
-    if (account.organizationId !== organizationId) {
-      throw new NotFoundException('Social account not found');
-    }
-
-    // Optional: Revoke tokens on the platform side
+  private async revokeTokens(account: any): Promise<void> {
     try {
+      const decryptedToken = await this.encryptionService.decrypt(
+        account.accessToken,
+      );
       const platformService = this.platformServiceFactory.getService(
         account.platform,
       );
-      await platformService.revokeToken(account.accessToken);
+      await platformService.revokeToken(decryptedToken);
+      this.logger.log(`Revoked token for ${account.platform}`);
     } catch (error) {
       this.logger.warn(
         `Failed to revoke token for ${account.platform}:`,
-        error,
+        error.message,
       );
+      // Don't throw - account will be disconnected anyway
+    }
+  }
+
+  /**
+   * Encrypt token data
+   */
+  private async encryptTokens(tokens: any): Promise<{
+    accessToken: string;
+    refreshToken: string | null;
+  }> {
+    const encryptedAccessToken = await this.encryptionService.encrypt(
+      tokens.accessToken || tokens.access_token,
+    );
+
+    const refreshToken = tokens.refreshToken || tokens.refresh_token;
+    const encryptedRefreshToken = refreshToken
+      ? await this.encryptionService.encrypt(refreshToken)
+      : null;
+
+    return {
+      accessToken: encryptedAccessToken,
+      refreshToken: encryptedRefreshToken,
+    };
+  }
+
+  /**
+   * Calculate token expiration date
+   */
+  private calculateTokenExpiration(tokens: any): Date | undefined {
+    if (tokens.expiresIn || tokens.expires_in) {
+      const expiresIn = tokens.expiresIn || tokens.expires_in;
+      return new Date(Date.now() + expiresIn * 1000);
     }
 
-    // Use SocialAccountService for soft delete
-    await this.socialAccountService.disconnect(accountId);
+    if (tokens.expires_at) {
+      return new Date(tokens.expires_at * 1000);
+    }
 
-    this.logger.log(
-      `Disconnected ${account.platform} account ${account.username} from organization ${organizationId}`,
+    return undefined;
+  }
+
+  /**
+   * Normalize token scopes
+   */
+  private normalizeScopes(scope: string | undefined, platform: Platform): string[] {
+    if (!scope) {
+      return this.getPlatformScopes(platform).split(/[,\s]+/);
+    }
+
+    // Split by comma or space depending on platform
+    const delimiter = platform === Platform.X || platform === Platform.LINKEDIN ? ' ' : ',';
+    return scope.split(delimiter).map(s => s.trim()).filter(Boolean);
+  }
+
+  /**
+   * Check if account needs reauthentication
+   */
+  private needsReauth(account: any): boolean {
+    return account.tokenExpiresAt && account.tokenExpiresAt < new Date();
+  }
+
+  /**
+   * Check if token needs refresh
+   */
+  private needsTokenRefresh(account: any): boolean {
+    return (
+      account.tokenExpiresAt &&
+      account.tokenExpiresAt < new Date() &&
+      !!account.refreshToken
     );
   }
 
   /**
-   * Get a valid access token for an account (with automatic refresh)
+   * Get platform-specific scopes
    */
-  async getValidAccessToken(accountId: string): Promise<string> {
-    const account = await this.socialAccountService.findById(accountId);
-
-    // Check if token needs refresh
-    if (
-      account.tokenExpiresAt &&
-      account.tokenExpiresAt < new Date() &&
-      account.refreshToken
-    ) {
-      this.logger.log(`Refreshing expired token for account ${accountId}`);
-      return await this.refreshAccessToken(accountId);
-    }
-
-    // DECRYPT the token before returning it
-    try {
-      return this.encryptionService.decrypt(account.accessToken);
-    } catch (error) {
-      this.logger.error(
-        `Failed to decrypt token for account ${accountId}:`,
-        error,
-      );
-      throw new Error(
-        'Token decryption failed. Please reconnect your account.',
-      );
-    }
-  }
-
-  // --- Private Helper Methods ---
-
   private getPlatformScopes(platform: Platform): string {
     const scopes = {
       [Platform.INSTAGRAM]: [
@@ -461,7 +683,7 @@ export class SocialIntegrationService {
         'tweet.write',
         'users.read',
         'offline.access',
-      ].join(' '), // FIXED: X uses spaces, not commas
+      ].join(' '),
 
       [Platform.LINKEDIN]: [
         'w_member_social',
@@ -479,7 +701,12 @@ export class SocialIntegrationService {
       [Platform.X]: process.env.X_CLIENT_ID,
       [Platform.LINKEDIN]: process.env.LINKEDIN_CLIENT_ID,
     };
-    return envVars[platform];
+    
+    const clientId = envVars[platform];
+    if (!clientId) {
+      throw new Error(`Missing client ID for platform: ${platform}`);
+    }
+    return clientId;
   }
 
   private getRedirectUri(platform: Platform): string {
@@ -493,164 +720,23 @@ export class SocialIntegrationService {
       [Platform.X]: process.env.X_CLIENT_SECRET,
       [Platform.LINKEDIN]: process.env.LINKEDIN_CLIENT_SECRET,
     };
-    return envVars[platform];
-  }
-
-  private async exchangeCodeForTokens(
-    platform: Platform,
-    code: string,
-    state?: string,
-  ): Promise<any> {
-    const tokenUrl = this.getTokenUrl(platform);
-    const clientId = this.getClientId(platform);
-    const clientSecret = this.getClientSecret(platform);
-    const redirectUri = this.getRedirectUri(platform);
-
-    // For Twitter: Use Basic Auth in headers, not client_secret in body
-    const bodyParams = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code: code,
-      redirect_uri: redirectUri,
-    });
-
-    const headers: any = {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    };
-
-    if (platform === Platform.X) {
-      const verifier = await this.redisService.get(`x_pkce:${state}`);
-      if (!verifier) throw new Error('Missing PKCE verifier for Twitter OAuth');
-
-      bodyParams.append('code_verifier', verifier);
-      bodyParams.append('client_id', clientId);
-
-      // 🔥 Add Basic Auth header for Twitter
-      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString(
-        'base64',
-      );
-      headers['Authorization'] = `Basic ${credentials}`;
-    } else {
-      // For other platforms, keep client_id and client_secret in body
-      bodyParams.append('client_id', clientId);
-      bodyParams.append('client_secret', clientSecret);
+    
+    const clientSecret = envVars[platform];
+    if (!clientSecret) {
+      throw new Error(`Missing client secret for platform: ${platform}`);
     }
-
-    try {
-      console.log(bodyParams);
-      const response = await axios.post(tokenUrl, bodyParams, {
-        headers: headers,
-        timeout: 30000,
-        validateStatus: (status) => status < 500,
-      });
-      console.log(response);
-
-      this.logger.debug(
-        `Token exchange response for ${platform}:`,
-        response.data,
-      );
-
-      const tokenData = response.data;
-
-      if (response.status >= 400) {
-        this.logger.error(`Token exchange failed for ${platform}:`, tokenData);
-
-        // Meta-specific error handling
-        if (platform === Platform.INSTAGRAM || platform === Platform.FACEBOOK) {
-          if (tokenData.error?.code === 190) {
-            throw new Error('Session expired. Please reconnect your account.');
-          }
-          if (tokenData.error?.code === 100) {
-            throw new Error(
-              'Missing required permissions. Please grant all requested scopes.',
-            );
-          }
-          if (tokenData.error?.code === 10) {
-            throw new Error(
-              'Application not authorized. Please check app permissions.',
-            );
-          }
-        }
-
-        throw new Error(
-          `Token exchange failed: ${tokenData.error?.message || tokenData.error_description || response.statusText}`,
-        );
-      }
-
-      // Normalize token response for Meta platforms
-      if (platform === Platform.INSTAGRAM || platform === Platform.FACEBOOK) {
-        return {
-          access_token: tokenData.access_token,
-          refresh_token: tokenData.refresh_token,
-          expires_at: tokenData.expires_in
-            ? Math.floor(Date.now() / 1000) + tokenData.expires_in
-            : undefined,
-          scope: tokenData.scope || this.getPlatformScopes(platform),
-          token_type: tokenData.token_type,
-        };
-      }
-
-      return tokenData;
-    } catch (error) {
-      if (axios.isAxiosError(error)) {
-        if (error.code === 'ECONNABORTED') {
-          throw new Error(
-            'Request timeout connecting to Facebook. Please try again.',
-          );
-        }
-        if (error.code === 'ENETUNREACH' || error.code === 'ETIMEDOUT') {
-          throw new Error(
-            'Network error connecting to Facebook. Please check your internet connection and try again.',
-          );
-        }
-      }
-      throw error;
-    }
+    return clientSecret;
   }
 
   private getTokenUrl(platform: Platform): string {
     const urls = {
       [Platform.INSTAGRAM]:
-        'https://graph.facebook.com/v18.0/oauth/access_token',
+        'https://graph.facebook.com/v19.0/oauth/access_token',
       [Platform.FACEBOOK]:
-        'https://graph.facebook.com/v18.0/oauth/access_token',
+        'https://graph.facebook.com/v19.0/oauth/access_token',
       [Platform.X]: 'https://api.x.com/2/oauth2/token',
       [Platform.LINKEDIN]: 'https://www.linkedin.com/oauth/v2/accessToken',
     };
     return urls[platform];
-  }
-
-  private async refreshTokens(
-    platform: Platform,
-    refreshToken: string,
-  ): Promise<any> {
-    const tokenUrl = this.getTokenUrl(platform);
-    const clientId = this.getClientId(platform);
-    const clientSecret = this.getClientSecret(platform);
-
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Token refresh failed: ${response.statusText}`);
-    }
-
-    return await response.json();
-  }
-
-  async validateCredentials(
-    platform: Platform,
-    accessToken: string,
-  ): Promise<boolean> {
-    const platformService = this.platformServiceFactory.getService(platform);
-    return platformService.validateCredentials(accessToken);
   }
 }

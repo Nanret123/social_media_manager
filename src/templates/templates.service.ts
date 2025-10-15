@@ -15,80 +15,12 @@ import {
 import { AiContentService } from 'src/ai/services/ai-content.service';
 import { BrandKitService } from 'src/brand-kit/brand-kit.service';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { CreateTemplateDto } from './dtos/create-template.dto';
+import { GenerateFromTemplateDto } from './dtos/generate-from-template.dto';
+import { UpdateTemplateDto } from './dtos/update-template.dto';
+import { TemplateContent, TemplateVariable } from './interfaces/index.interface';
 
-export interface TemplateContent {
-  version: number;
-  structure: {
-    caption: string;
-    hashtags?: string[];
-    cta?: string;
-    variables: Record<
-      string,
-      {
-        type: 'string' | 'number' | 'boolean' | 'date' | 'url';
-        required: boolean;
-        defaultValue?: any;
-        description?: string;
-        validation?: {
-          minLength?: number;
-          maxLength?: number;
-          pattern?: string;
-          options?: string[];
-        };
-      }
-    >;
-  };
-  metadata: {
-    idealLength: number;
-    tone: string;
-    emojiRecommendations?: string[];
-    platformSpecific?: Record<string, any>;
-  };
-}
 
-interface CreateTemplateDto {
-  name: string;
-  description?: string;
-  platform: Platform;
-  contentType: ContentType;
-  category: TemplateCategory;
-  tags?: string[];
-  content: TemplateContent;
-  isPublic?: boolean;
-  brandKitId?: string;
-}
-
-interface UpdateTemplateDto {
-  name?: string;
-  description?: string;
-  category?: TemplateCategory;
-  tags?: string[];
-  content?: TemplateContent;
-  isPublic?: boolean;
-  status?: TemplateStatus;
-  brandKitId?: string;
-}
-
-interface GenerateFromTemplateDto {
-  templateId: string;
-  variables: Record<string, any>;
-  options?: {
-    enhanceWithAI?: boolean;
-    tone?: string;
-    platform?: Platform;
-    includeHashtags?: boolean;
-    includeCTA?: boolean;
-  };
-}
-
-interface TemplateVariable {
-  required?: boolean;
-  validation?: {
-    regex?: string;
-    minLength?: number;
-    maxLength?: number;
-  };
-}
 
 @Injectable()
 export class ContentTemplatesService {
@@ -101,7 +33,6 @@ export class ContentTemplatesService {
   ) {}
 
   async createTemplate(
-    organizationId: string,
     userId: string,
     dto: CreateTemplateDto,
   ) {
@@ -110,12 +41,12 @@ export class ContentTemplatesService {
 
     // Verify brand kit belongs to organization if provided
     if (dto.brandKitId) {
-      await this.verifyBrandKitAccess(organizationId, dto.brandKitId);
+      await this.verifyBrandKitAccess(dto.organizationId, dto.brandKitId);
     }
 
     return this.prisma.contentTemplate.create({
       data: {
-        organizationId: organizationId || null, // null for system templates
+        organizationId: dto.organizationId || null, // null for system templates
         userId,
         name: dto.name,
         description: dto.description,
@@ -130,13 +61,7 @@ export class ContentTemplatesService {
         isPublic: dto.isPublic || false,
         brandKitId: dto.brandKitId,
         status: 'DRAFT',
-      },
-      include: {
-        user: {
-          select: { id: true, firstName: true, lastName: true, email: true },
-        },
-        brandKit: { select: { id: true, name: true } },
-      },
+      }
     });
   }
 
@@ -204,7 +129,6 @@ export class ContentTemplatesService {
       this.prisma.contentTemplate.findMany({
         where,
         include: {
-          user: { select: { firstName: true, lastName: true } },
           brandKit: { select: { name: true } },
           _count: {
             select: { favorites: true },
@@ -245,12 +169,11 @@ export class ContentTemplatesService {
 
     if (filters.platform) where.platform = filters.platform;
     if (filters.category) where.category = filters.category;
-    if (filters.featured) where.favoriteCount = { gt: 10 }; // Popular templates
+    //if (filters.featured) where.favoriteCount = { gt: 10 }; // Popular templates
 
     return this.prisma.contentTemplate.findMany({
       where,
       include: {
-        user: { select: { firstName: true, lastName: true } },
         _count: {
           select: { favorites: true },
         },
@@ -266,10 +189,6 @@ export class ContentTemplatesService {
     dto: UpdateTemplateDto,
   ) {
     const template = await this.getTemplateById(id, organizationId);
-
-    if (!template) {
-      throw new NotFoundException('Template not found');
-    }
 
     // Validate content if provided
     if (dto.content) {
@@ -296,33 +215,24 @@ export class ContentTemplatesService {
         ...updateData,
         updatedAt: new Date(),
       },
-      include: {
-        user: { select: { firstName: true, lastName: true } },
-        brandKit: { select: { name: true } },
-      },
     });
   }
 
   async deleteTemplate(id: string, organizationId: string) {
-    const template = await this.getTemplateById(id, organizationId);
+   await this.getTemplateById(id, organizationId);
 
-    if (!template) {
-      throw new NotFoundException('Template not found');
-    }
-
-    // Soft delete
-    return this.prisma.contentTemplate.update({
+    return this.prisma.contentTemplate.delete({
       where: { id },
-      data: { status: 'DELETED' },
     });
   }
 
   async generateFromTemplate(
+    templateId: string,
     dto: GenerateFromTemplateDto,
     organizationId: string,
     userId: string
   ) {
-    const template = await this.getTemplateById(dto.templateId, organizationId);
+    const template = await this.getTemplateById(templateId, organizationId);
 
     if (template.status !== 'ACTIVE') {
       throw new BadRequestException('Template is not active');
@@ -444,7 +354,7 @@ export class ContentTemplatesService {
   ) {
     const template = await this.getTemplateById(templateId, organizationId);
 
-    return this.createTemplate(organizationId, userId, {
+    return this.createTemplate(userId, {
       name: newName || `${template.name} (Copy)`,
       description: template.description,
       platform: template.platform,
@@ -452,41 +362,11 @@ export class ContentTemplatesService {
       category: template.category,
       tags: template.tags,
       content: template.content as unknown as TemplateContent,
-      isPublic: false, // Duplicates are private by default
+      isPublic: false, 
       brandKitId: template.brandKitId,
     });
   }
 
-  async getTemplateAnalytics(templateId: string, organizationId: string) {
-    const template = await this.getTemplateById(templateId, organizationId);
-
-    const usageStats = await this.prisma.aiContentGeneration.groupBy({
-      by: ['createdAt'],
-      where: {
-        organizationId,
-        metadata: {
-          path: ['templateId'],
-          equals: templateId,
-        },
-      } as any, // 👈 fix circular type issue
-      _count: { id: true },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    return {
-      template: {
-        id: template.id,
-        name: template.name,
-        usageCount: template.usageCount,
-        favoriteCount: template.favoriteCount,
-      },
-      usageStats: usageStats.map((stat) => ({
-        date: stat.createdAt,
-        count: stat._count.id,
-      })),
-      popularity: this.calculatePopularityScore(template),
-    };
-  }
 
   private validateTemplateContent(content: TemplateContent) {
     if (!content.structure || !content.structure.caption) {

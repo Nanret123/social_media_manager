@@ -16,7 +16,7 @@ import {
   ApiResponse,
 } from '@nestjs/swagger';
 
-@ApiTags('Invitations')
+@ApiTags('Organization Invitations')
 @ApiBearerAuth()
 @Controller()
 export class InvitationsController {

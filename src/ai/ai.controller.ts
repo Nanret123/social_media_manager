@@ -86,31 +86,6 @@ export class AiController {
     return this.aiImageService.generateImage(organizationId, userId, dto);
   }
 
-  @Delete(':generationId')
-  @ApiOperation({
-    summary: 'Delete AI-generated image',
-    description:
-      'Deletes an AI-generated image and its associated media record from Cloudinary and the database. Only accessible to authenticated users within the organization.',
-  })
-  @ApiParam({
-    name: 'generationId',
-    type: String,
-    description: 'Unique ID of the AI-generated image record',
-    example: 'gen_abc123',
-  })
-  @ApiResponse({
-    status: 204,
-    description: 'Image deleted successfully (no content returned)',
-  })
-  async deleteAiImage(
-    @Param('generationId') generationId: string,
-    @Param('organizationId') organizationId: string,
-    @Req() req: any,
-  ): Promise<void> {
-    // Optionally check user/org permissions here
-    await this.aiImageService.deleteImage(generationId, organizationId);
-  }
-
   @Get('monthly/:organizationId/usage')
   @ApiOperation({ summary: 'Get current month AI usage for organization' })
   @ApiResponse({

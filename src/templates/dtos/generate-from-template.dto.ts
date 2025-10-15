@@ -1,9 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Platform } from '@prisma/client';
+import {
+  IsString,
+  IsObject,
+  IsOptional,
+  IsBoolean,
+  IsEnum,
+} from 'class-validator';
 
 export class GenerateFromTemplateDto {
-  @ApiProperty({ description: 'Template ID to generate content from' })
-  templateId: string;
-
   @ApiProperty({
     type: Object,
     description: 'Variables to replace in the template',
@@ -13,6 +18,7 @@ export class GenerateFromTemplateDto {
       url: 'https://shop.com',
     },
   })
+  @IsObject()
   variables: Record<string, any>;
 
   @ApiPropertyOptional({
@@ -23,12 +29,16 @@ export class GenerateFromTemplateDto {
       includeCTA: true,
       enhanceWithAI: true,
       tone: 'FRIENDLY',
+      platform: 'INSTAGRAM',
     },
   })
+  @IsOptional()
+  @IsObject()
   options?: {
     includeHashtags?: boolean;
     includeCTA?: boolean;
     enhanceWithAI?: boolean;
     tone?: string;
+    platform?: Platform;
   };
 }

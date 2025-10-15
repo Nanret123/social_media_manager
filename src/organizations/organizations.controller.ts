@@ -66,10 +66,10 @@ export class OrganizationsController {
     return this.organizationsService.getAllOrganizations(query);
   }
 
-    @Get()
+  @Get('organizationId/media')
   @ApiOperation({ summary: 'Get all media files for an organization' })
   async getAllOrganizationMedia(
-    @Param('orgId') orgId: string,
+    @Param('organizationId') orgId: string,
     @Query() query: GetOrganizationMediaDto,
   ) {
     return this.organizationsService.getAllOrganizationMedia(orgId, query);
@@ -95,8 +95,8 @@ export class OrganizationsController {
       },
     },
   })
-  async getOrganization(@Req() req, @Param('id') orgId: string) {
-    return this.organizationsService.getOrganization(orgId, req.user.id);
+  async getOrganization(@Param('id') orgId: string) {
+    return this.organizationsService.getOrganization(orgId);
   }
 
   @Patch(':id')

@@ -38,6 +38,7 @@ export class SocialAccountService {
           scopes: createDto.scopes,
           isActive: true, // Reactivate if previously disconnected
           updatedAt: new Date(),
+          lastSyncAt: new Date()
         },
         create: {
           organizationId: createDto.organizationId,
@@ -51,6 +52,7 @@ export class SocialAccountService {
           tokenExpiresAt: createDto.tokenExpiresAt,
           scopes: createDto.scopes,
           isActive: true,
+          lastSyncAt: new Date()
         },
       });
 

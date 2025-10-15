@@ -100,11 +100,40 @@ model SocialAccount {
   accountType   SocialAccountType    @default(PAGE) // PAGE or PROFILE
   notifications NotificationEntity[]
   conversations Conversation[]
+  pages           PageAccount[]
 
   @@unique([organizationId, platform, platformAccountId])
   @@index([platform, isActive])
   @@index([organizationId])
   @@index([accountType])
+}
+
+model PageAccount {
+  id                    String   @id @default(cuid())
+  socialAccountId       String
+  platformPageId        String   // Facebook Page ID
+  name                  String
+  accessToken           String   // Page access token (encrypted)
+  category              String?  // Page category
+  instagramBusinessId   String?  // Linked Instagram account ID
+  instagramUsername     String?  // Linked Instagram username
+  profilePicture        String?  // Page/Instagram profile picture
+  metadata              Json?    // Additional page data
+  
+  // Relations
+  socialAccount         SocialAccount @relation(fields: [socialAccountId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // A page can have posts, metrics, etc.
+  // posts            Post[]
+  // EngagementMetric EngagementMetric[]
+  // conversations    Conversation[]
+  
+  @@unique([platformPageId])
+  @@index([socialAccountId])
+  @@index([instagramBusinessId])
 }
 
 model Post {
@@ -439,26 +468,6 @@ model Message {
   // ADD indexes for efficient querying
   @@index([conversationId, sentAt]) // For loading conversation messages
   @@index([sentAt]) // For global search/sorting
-}
-
-enum TemplateCategory {
-  PROMOTIONAL
-  EDUCATIONAL
-  ENGAGEMENT
-  ANNOUNCEMENT
-  EVENT
-  PRODUCT
-  TESTIMONIAL
-  UGC
-  HOLIDAY
-  INDUSTRY_NEWS
-}
-
-enum TemplateStatus {
-  DRAFT
-  ACTIVE
-  ARCHIVED
-  DELETED
 }
 
 model ContentTemplate {
@@ -1046,6 +1055,7 @@ enum MessageStatus {
 
 enum Platform {
   X
+  META
   LINKEDIN
   FACEBOOK
   INSTAGRAM
@@ -1213,4 +1223,24 @@ enum PermissionAction {
   MANAGE
   APPROVE
   PUBLISH
+}
+
+enum TemplateCategory {
+  PROMOTIONAL
+  EDUCATIONAL
+  ENGAGEMENT
+  ANNOUNCEMENT
+  EVENT
+  PRODUCT
+  TESTIMONIAL
+  UGC
+  HOLIDAY
+  INDUSTRY_NEWS
+}
+
+enum TemplateStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+  DELETED
 }

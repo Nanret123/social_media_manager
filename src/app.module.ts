@@ -29,6 +29,7 @@ import { BrandKitModule } from './brand-kit/brand-kit.module';
 import { PollingModule } from './polling/polling.module';
 import { SocialAccountModule } from './social-account/social-account.module';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { MetaModule } from './social-integration/meta/meta.module';
 
 
 @Module({
@@ -74,6 +75,8 @@ import { OrganizationsModule } from './organizations/organizations.module';
     RateLimitModule,
 
     BrandKitModule,
+
+    MetaModule,
 
 
     //AuditModule,

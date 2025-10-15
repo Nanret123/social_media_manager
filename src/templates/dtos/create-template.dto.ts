@@ -1,67 +1,68 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Platform, ContentType, TemplateCategory } from '@prisma/client';
-import { TemplateContent } from '../templates.service';
+import { TemplateContentDto } from './template-content.dto';
+import { Platform, ContentType, TemplateCategory } from '@prisma/client'; // adjust import
+import { IsBoolean, IsEnum, IsOptional, IsString, IsArray, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateTemplateDto {
   @ApiProperty({ example: 'Summer Sale Post', description: 'Template name' })
+  @IsString()
   name: string;
 
   @ApiPropertyOptional({ example: 'A catchy template for summer discounts' })
+  @IsOptional()
+  @IsString()
   description?: string;
 
-  @ApiProperty({
-    enum: Platform,
-    example: 'INSTAGRAM',
-    description: 'Target platform (e.g., Instagram, Facebook)',
-  })
+  @ApiProperty({ enum: Platform, example: 'INSTAGRAM' })
+  @IsEnum(Platform)
   platform: Platform;
 
-  @ApiProperty({
-    enum: ContentType,
-    example: 'POST',
-    description: 'Type of content (e.g., post, story, tweet)',
-  })
+  @ApiProperty({ enum: ContentType, example: 'POST' })
+  @IsEnum(ContentType)
   contentType: ContentType;
 
-  @ApiProperty({
-    enum: TemplateCategory,
-    example: 'PROMOTIONAL',
-    description: 'Category of the template',
-  })
+  @ApiProperty({ enum: TemplateCategory, example: 'PROMOTIONAL' })
+  @IsEnum(TemplateCategory)
   category: TemplateCategory;
 
   @ApiPropertyOptional({
     type: [String],
     example: ['summer', 'discounts'],
-    description: 'Tags for easier search and filtering',
   })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
   tags?: string[];
 
   @ApiProperty({
-    type: Object,
+    type: TemplateContentDto,
     description: 'Content structure of the template',
-    example: {
-      structure: {
-        caption: 'Buy {product} now and save {discount}!',
-        hashtags: ['#sale', '#summer'],
-        cta: 'Shop now at {url}',
-      },
-      metadata: {
-        tone: 'FRIENDLY',
-        idealLength: 120,
-      },
-    },
   })
-  content: TemplateContent;
+  @ValidateNested()
+  @Type(() => TemplateContentDto)
+  content: TemplateContentDto;
 
   @ApiPropertyOptional({
     description: 'Set to true to make the template public',
     default: false,
   })
+  @IsOptional()
+  @IsBoolean()
   isPublic?: boolean;
 
   @ApiPropertyOptional({
     description: 'Associated Brand Kit ID (must belong to the organization)',
   })
+  @IsOptional()
+  @IsString()
   brandKitId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Organization ID (if creating a template for an organization)',
+  })
+  @IsOptional()
+  @IsString()
+  organizationId?: string;
 }
+

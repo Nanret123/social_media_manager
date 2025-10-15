@@ -132,7 +132,7 @@ export class SocialPostingService {
 
     const mediaFiles = await Promise.all(
       mediaFileIds.map((id) =>
-        this.mediaService.getFileById(id, organizationId, tx).catch(() => null),
+        this.mediaService.getFileById(id, organizationId).catch(() => null),
       ),
     );
 

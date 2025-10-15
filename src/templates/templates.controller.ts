@@ -21,6 +21,8 @@ import { ContentTemplatesService } from './templates.service';
 import { CreateTemplateDto } from './dtos/create-template.dto';
 import { GenerateFromTemplateDto } from './dtos/generate-from-template.dto';
 import { UpdateTemplateDto } from './dtos/update-template.dto';
+import { TemplateFilterDto } from './dtos/get-org-templates.dto';
+import { GetSystemTemplatesDto } from './dtos/get-system-template.dto';
 
 @ApiTags('Content Templates')
 @ApiBearerAuth()
@@ -38,72 +40,65 @@ export class ContentTemplatesController {
     @Req() req: any, // assume req.user contains { id, organizationId }
   ) {
     return this.templatesService.createTemplate(
-      req.user.organizationId,
       req.user.id,
       dto,
     );
   }
 
-  // GET ONE
-  @Get(':id')
-  @ApiOperation({ summary: 'Get template by ID' })
-  @ApiResponse({ status: 200, description: 'Template details returned' })
-  getOne(@Param('id') id: string, @Req() req: any) {
-    return this.templatesService.getTemplateById(id, req.user.organizationId);
-  }
-
   // GET ORG TEMPLATES
-  @Get()
+  @Get(':organizationId')
   @ApiOperation({ summary: 'List organization templates' })
-  getOrgTemplates(@Req() req: any, @Query() query: any) {
+  getOrgTemplates(@Param('organizationId') organizationId: string, @Query() query:TemplateFilterDto ) {
     return this.templatesService.getOrganizationTemplates(
-      req.user.organizationId,
-      query,
+      organizationId,
+      query
     );
   }
 
   // GET SYSTEM TEMPLATES
   @Get('system/all')
   @ApiOperation({ summary: 'List system templates' })
-  getSystemTemplates(@Query() query: any) {
+  getSystemTemplates(@Query() query: GetSystemTemplatesDto) {
     return this.templatesService.getSystemTemplates(query);
   }
 
   // UPDATE
-  @Put(':id')
+  @Put(':id/:organizationId')
   @ApiOperation({ summary: 'Update a template' })
   update(
     @Param('id') id: string,
+    @Param('organizationId') organizationId: string,
     @Body() dto: UpdateTemplateDto,
     @Req() req: any,
   ) {
+    console.log('UpdateTemplateDto:', dto);
     return this.templatesService.updateTemplate(
       id,
-      req.user.organizationId,
+      organizationId,
       dto,
     );
   }
 
   // DELETE
-  @Delete(':id')
-  @ApiOperation({ summary: 'Delete a template (soft delete)' })
-  delete(@Param('id') id: string, @Req() req: any) {
-    return this.templatesService.deleteTemplate(id, req.user.organizationId);
+  @Delete(':id/:organizationId')
+  @ApiOperation({ summary: 'Delete a template' })
+  delete(@Param('id') id: string, @Param('organizationId') organizationId: string,) {
+    return this.templatesService.deleteTemplate(id, organizationId);
   }
 
   // GENERATE FROM TEMPLATE
-  @Post(':id/generate')
+  @Post(':id/:organizationId/generate')
   @ApiOperation({ summary: 'Generate content from a template' })
   generateFromTemplate(
     @Param('id') id: string,
+    @Param('organizationId') organizationId: string,
     @Body() dto: GenerateFromTemplateDto,
     @Req() req: any,
   ) {
-    // attach templateId to DTO for service
-    dto.templateId = id;
     return this.templatesService.generateFromTemplate(
+      id,
       dto,
-      req.user.organizationId,
+      organizationId,
       req.user.id,
     );
   }
@@ -123,38 +118,38 @@ export class ContentTemplatesController {
   }
 
   // USER FAVORITES
-  @Get('user/favorites')
+  @Get(':organizationId/user/favorites')
   @ApiOperation({ summary: 'Get user favorite templates' })
-  getUserFavorites(@Req() req: any) {
+  getUserFavorites(@Req() req: any, @Param('organizationId') organizationId: string) {
     return this.templatesService.getUserFavorites(
       req.user.id,
-      req.user.organizationId,
+      organizationId,
     );
   }
 
   // DUPLICATE
-  @Post(':id/duplicate')
+  @Post(':id/:organizationId/duplicate')
   @ApiOperation({ summary: 'Duplicate a template' })
   duplicate(
     @Param('id') id: string,
+    @Param('organizationId') organizationId: string,
     @Body('newName') newName: string,
     @Req() req: any,
   ) {
     return this.templatesService.duplicateTemplate(
       id,
       req.user.id,
-      req.user.organizationId,
+      organizationId,
       newName,
     );
   }
 
-  // ANALYTICS
-  @Get(':id/analytics')
-  @ApiOperation({ summary: 'Get analytics for a template' })
-  getAnalytics(@Param('id') id: string, @Req() req: any) {
-    return this.templatesService.getTemplateAnalytics(
-      id,
-      req.user.organizationId,
-    );
+  // GET ONE
+  @Get(':id')
+  @ApiOperation({ summary: 'Get template by ID' })
+  @ApiResponse({ status: 200, description: 'Template details returned' })
+  getOne(@Param('id') id: string, @Req() req: any) {
+    return this.templatesService.getTemplateById(id, req.user.organizationId);
   }
+
 }

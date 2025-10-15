@@ -1,14 +1,14 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { Prisma } from '@prisma/client';
-import { CloudinaryService } from './cloudinary.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
-
+import { v2 as cloudinary } from 'cloudinary';
 
 @Injectable()
 export class MediaService {
@@ -24,27 +24,19 @@ export class MediaService {
     'video/x-msvideo',
   ];
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly cloudinary: CloudinaryService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
    * Get media file by ID (optionally scoped by organization)
    */
-  async getFileById(
-    fileId: string,
-    organizationId?: string,
-    tx?: Prisma.TransactionClient,
-  ) {
-    const client = tx || this.prisma;
+  async getFileById(fileId: string, organizationId?: string) {
     const where: Prisma.MediaFileWhereInput = { id: fileId };
 
     if (organizationId) {
       where.organizationId = organizationId;
     }
 
-    const file = await client.mediaFile.findFirst({ where });
+    const file = await this.prisma.mediaFile.findFirst({ where });
     if (!file) throw new NotFoundException('Media file not found');
 
     return file;
@@ -57,14 +49,18 @@ export class MediaService {
     userId: string,
     organizationId: string,
     file: Express.Multer.File,
-    tx?: Prisma.TransactionClient,
   ) {
     this.validateFile(file);
 
-    const uploaded = await this.safeUpload(file);
-    const client = tx || this.prisma;
+    const uploaded = await cloudinary.uploader.upload(
+      `data:${file.mimetype};base64,${file.buffer.toString('base64')}`,
+      {
+        resource_type: file.mimetype.startsWith('video/') ? 'video' : 'image',
+        folder: `org_${organizationId}`,
+      },
+    );
 
-    return client.mediaFile.create({
+    return this.prisma.mediaFile.create({
       data: {
         userId,
         organizationId,
@@ -93,12 +89,25 @@ export class MediaService {
     userId: string,
     organizationId: string,
   ) {
-    // validate first to fail fast
+    // 1. Validate files first
     files.forEach((f) => this.validateFile(f));
 
-    const uploads = await Promise.all(files.map((f) => this.safeUpload(f)));
+    // 2. Upload all files concurrently to Cloudinary
+    const uploads = await Promise.all(
+      files.map((file) =>
+        cloudinary.uploader.upload(
+          `data:${file.mimetype};base64,${file.buffer.toString('base64')}`,
+          {
+            resource_type: file.mimetype.startsWith('video/')
+              ? 'video'
+              : 'image',
+            folder: `org_${organizationId}`,
+          },
+        ),
+      ),
+    );
 
-    // Use createMany for DB efficiency (no need for relations/return values)
+    // 3. Store metadata in DB (bulk insert)
     await this.prisma.mediaFile.createMany({
       data: uploads.map((uploaded, idx) => ({
         userId,
@@ -111,33 +120,40 @@ export class MediaService {
         publicId: uploaded.public_id,
         thumbnailUrl: uploaded.thumbnail_url,
         duration: uploaded.duration,
+        metadata: {
+          width: uploaded.width,
+          height: uploaded.height,
+          format: uploaded.format,
+        },
       })),
     });
 
-    // Fetch and return inserted records (optional)
-    return this.prisma.mediaFile.findMany({
-      where: { organizationId, userId },
-      orderBy: { createdAt: 'desc' },
-      take: files.length,
-    });
+    // 4. Return the uploaded URLs
+    return uploads.map((u) => ({
+      url: u.secure_url,
+      publicId: u.public_id,
+    }));
   }
 
   /**
    * Delete file from Cloudinary + DB
    */
-  async deleteFile(fileId: string) {
+  async deleteFile(fileId: string, organizationId: string) {
     const file = await this.prisma.mediaFile.findUnique({
-      where: { id: fileId },
+      where: { id: fileId, organizationId },
     });
     if (!file) throw new NotFoundException('File not found');
 
+    // Delete from Cloudinary
     if (file.publicId) {
       const resourceType: 'image' | 'video' = file.mimeType.startsWith('video/')
         ? 'video'
         : 'image';
 
       try {
-        await this.cloudinary.deleteImage(file.publicId, resourceType);
+        await cloudinary.uploader.destroy(file.publicId, {
+          resource_type: resourceType,
+        });
       } catch (err) {
         this.logger.error(
           `Failed to delete Cloudinary resource: ${file.publicId}`,
@@ -146,8 +162,52 @@ export class MediaService {
       }
     }
 
-    return this.prisma.mediaFile.delete({ where: { id: fileId } });
+    // Delete from DB
+    await this.prisma.mediaFile.delete({ where: { id: fileId } });
+    return { message: 'File deleted successfully' };
   }
+
+  async deleteMultipleFiles(fileIds: string[], organizationId: string) {
+  if (!fileIds.length) throw new BadRequestException('No file IDs provided');
+
+  const files = await this.prisma.mediaFile.findMany({
+    where: { id: { in: fileIds }, organizationId },
+  });
+
+  if (!files.length) throw new NotFoundException('No matching files found');
+
+  // Delete from Cloudinary in parallel
+  await Promise.all(
+    files.map(async (file) => {
+      if (file.publicId) {
+        const resourceType: 'image' | 'video' = file.mimeType.startsWith('video/')
+          ? 'video'
+          : 'image';
+
+        try {
+          await cloudinary.uploader.destroy(file.publicId, {
+            resource_type: resourceType,
+          });
+        } catch (err) {
+          this.logger.error(
+            `Failed to delete Cloudinary resource: ${file.publicId}`,
+            err.stack,
+          );
+        }
+      }
+    }),
+  );
+
+  // Delete all from DB in one go
+  await this.prisma.mediaFile.deleteMany({
+    where: { id: { in: fileIds } },
+  });
+
+  return { message: 'Files deleted successfully' };
+}
+
+
+
 
   /**
    * Cron job: cleanup expired files
@@ -163,14 +223,13 @@ export class MediaService {
 
     for (const file of expiredFiles) {
       try {
-        await this.deleteFile(file.id);
+        await this.deleteFile(file.id, file.organizationId);
         this.logger.log(`Deleted expired file: ${file.id}`);
       } catch (err) {
         this.logger.error(`Failed to delete file ${file.id}`, err.stack);
       }
     }
   }
-
 
   // ------------------------
   // Helpers
@@ -194,22 +253,6 @@ export class MediaService {
       throw new BadRequestException(
         `File too large. Max size is ${this.MAX_FILE_SIZE / 1024 / 1024}MB`,
       );
-    }
-  }
-
-  /**
-   * Safe Cloudinary upload with retry (resiliency)
-   */
-  private async safeUpload(file: Express.Multer.File, retries = 3) {
-    for (let i = 0; i < retries; i++) {
-      try {
-        return await this.cloudinary.uploadFile(file);
-      } catch (err) {
-        this.logger.warn(
-          `Upload failed for ${file.originalname}, attempt ${i + 1}/${retries}`,
-        );
-        if (i === retries - 1) throw err;
-      }
     }
   }
 }

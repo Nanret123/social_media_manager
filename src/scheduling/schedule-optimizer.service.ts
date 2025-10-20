@@ -80,8 +80,8 @@ export class ScheduleOptimizerService {
         organizationId,
         socialAccount: { platform },
         scheduledAt: {
-          gte: startOfDay,
-          lte: endOfDay,
+          gte: startOfDay.toISOString(),
+          lte: endOfDay.toISOString(),
         },
         status: { in: ['SCHEDULED', 'PUBLISHING'] },
       },

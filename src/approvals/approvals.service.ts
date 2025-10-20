@@ -1,41 +1,54 @@
+import { PostPublishingService } from 'src/post-publishing/post-publishing.service';
 import {
   Injectable,
   Logger,
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
-import { ApprovalStatus, PostStatus } from '@prisma/client';
+import {
+  ApprovalStatus,
+  Platform,
+  Post,
+  PostStatus,
+  Prisma,
+} from '@prisma/client';
 import { NotificationService } from 'src/notification/notification.service';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { GetApprovalsFilterDto } from './dtos/get-approval.dto';
+import { SocialSchedulerService } from 'src/social-scheduler/social-scheduler.service';
+
+export interface PostingResult {
+  success: boolean;
+  platformPostId?: string;
+  url?: string;
+  message?: string;
+  error?: string;
+  metadata?: Record<string, any>;
+}
+
+interface PostMetadata {
+  options?: Record<string, any>;
+  [key: string]: any;
+}
 
 @Injectable()
 export class ApprovalsService {
+  private readonly MAX_RETRIES = 3;
   private readonly logger = new Logger(ApprovalsService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationService,
+    private readonly schedulingService: SocialSchedulerService,
+    //private readonly postPublishingService: PostPublishingService,
   ) {}
 
-  async requestApproval(
+  async createApprovalRequest(
     postId: string,
     requesterId: string,
-    organizationId: string,
+    tx: Prisma.TransactionClient = this.prisma,
   ) {
-    const post = await this.prisma.post.findFirst({
-      where: { id: postId, organizationId },
-    });
-
-    if (!post) {
-      throw new NotFoundException('Post not found');
-    }
-
-    if (post.status !== 'DRAFT') {
-      throw new ForbiddenException('Only draft posts can be sent for approval');
-    }
-
-    return this.prisma.$transaction(async (tx) => {
-      // Create approval request
+    try {
       const approval = await tx.postApproval.create({
         data: {
           postId,
@@ -44,21 +57,97 @@ export class ApprovalsService {
         },
       });
 
-      // Update post status
-      await tx.post.update({
-        where: { id: postId },
-        data: { status: 'PENDING_APPROVAL' },
-      });
-
-      // Notify approvers
-      //await this.notificationsService.notifyApprovers(organizationId, postId);
-
+      this.logger.log(`📝 Approval request created for post ${postId}`);
       return approval;
+    } catch (error) {
+      this.logger.error(
+        `Failed to create approval request for post ${postId}: ${error.message}`,
+        error.stack || '',
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Get a single approval by ID (with related post and users)
+   */
+  async getApprovalById(approvalId: string, organizationId: string) {
+    const approval = await this.prisma.postApproval.findFirst({
+      where: {
+        id: approvalId,
+        post: { organizationId },
+      },
+      include: {
+        post: true,
+        requester: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        approver: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
     });
+
+    if (!approval) throw new NotFoundException('Approval not found');
+    return approval;
+  }
+
+  /**
+   * Get all approvals (with filters and pagination)
+   */
+  async getApprovals(organizationId: string, filters: GetApprovalsFilterDto) {
+    const where: Prisma.PostApprovalWhereInput = {
+      post: { organizationId },
+    };
+
+    if (filters.status) where.status = filters.status;
+    if (filters.postId) where.postId = filters.postId;
+    if (filters.requesterId) where.requesterId = filters.requesterId;
+    if (filters.approverId) where.approverId = filters.approverId;
+
+    const [approvals, total] = await Promise.all([
+      this.prisma.postApproval.findMany({
+        where,
+        include: {
+          post: true,
+          requester: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          approver: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+        },
+        orderBy: { requestedAt: 'desc' },
+        skip: (filters.page - 1) * filters.limit,
+        take: filters.limit,
+      }),
+      this.prisma.postApproval.count({ where }),
+    ]);
+
+    return {
+      approvals,
+      pagination: {
+        page: filters.page,
+        limit: filters.limit,
+        total,
+        pages: Math.ceil(total / filters.limit),
+      },
+    };
   }
 
   async approvePost(postId: string, approverId: string, comments?: string) {
-    return this.updateApprovalStatus(postId, approverId, 'APPROVED', comments);
+    const approval = await this.updateApprovalStatus(
+      postId,
+      approverId,
+      'APPROVED',
+      comments,
+    );
+
+    // Handle post publishing/scheduling after approval
+    await this.handlePostAfterApproval(postId);
+
+    this.logger.log(`✅ Post ${postId} approved and queued for next step`);
+    return approval;
   }
 
   async rejectPost(
@@ -67,7 +156,7 @@ export class ApprovalsService {
     comments: string,
     revisionNotes?: string,
   ) {
-    return this.updateApprovalStatus(
+    this.updateApprovalStatus(
       postId,
       approverId,
       'REJECTED',
@@ -89,6 +178,58 @@ export class ApprovalsService {
       comments,
       revisionNotes,
     );
+  }
+
+  /**
+   * Handle post workflow after approval
+   */
+  private async handlePostAfterApproval(postId: string): Promise<void> {
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      include: {
+        socialAccount: {
+          include: {
+            pages: true,
+          },
+        },
+      },
+    });
+
+    if (!post) {
+      this.logger.error(`Post ${postId} not found after approval`);
+      return;
+    }
+
+    try {
+      // Handle scheduling or immediate publishing
+      if (
+        post.scheduledAt &&
+        new Date(post.scheduledAt).getTime() > Date.now()
+      ) {
+        await this.schedulingService.schedulePost(post);
+
+        await this.prisma.post.update({
+          where: { id: post.id },
+          data: { status: PostStatus.SCHEDULED },
+        });
+
+        this.logger.log(
+          `📅 Post ${postId} scheduled for ${post.scheduledAt}`,
+        );
+      } else {
+        // Publish immediately
+        await this.schedulingService.publishImmediately(post);
+        this.logger.log(
+          `🚀 Post ${postId} published immediately after approval`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to handle post after approval: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
   }
 
   private async updateApprovalStatus(
@@ -130,14 +271,16 @@ export class ApprovalsService {
       let postStatus: PostStatus;
       switch (status) {
         case 'APPROVED':
-          postStatus = 'APPROVED';
+          postStatus = PostStatus.APPROVED;
           break;
         case 'REJECTED':
-          postStatus = 'DRAFT';
+          postStatus = PostStatus.DRAFT;
           break;
         case 'CHANGES_REQUESTED':
-          postStatus = 'DRAFT';
+          postStatus = PostStatus.DRAFT;
           break;
+        default:
+          postStatus = PostStatus.DRAFT;
       }
 
       await tx.post.update({
@@ -157,36 +300,94 @@ export class ApprovalsService {
     });
   }
 
-  async getPendingApprovals(organizationId: string, approverId?: string) {
-    const where: any = {
-      status: 'PENDING',
-      post: { organizationId },
-    };
+  /**
+   * Main publish execution orchestrator
+   */
+  // async executePublish(post: any): Promise<PostingResult> {
+  //   try {
+  //     // Call platform publishing service
+  //     const result = await this.postPublishingService.publishToPlatform(
+  //       post.organizationId,
+  //       {
+  //         platform: post.socialAccount.platform as Platform,
+  //         accountId: post.socialAccount.id,
+  //         content: post.content,
+  //         mediaFileIds: post.mediaFileIds,
+  //         options: (post.metadata as PostMetadata)?.options,
+  //       },
+  //     );
 
-    if (approverId) {
-      // In a real implementation, you might filter by approver's role/team
-      where.post = { ...where.post, authorId: approverId };
+  //     // Handle result
+  //     if (result.success) {
+  //       await this.markPostAsPublished(post.id, result.platformPostId);
+  //       return result;
+  //     } else {
+  //       await this.markPostAsFailed(post.id, result.error);
+  //       return result;
+  //     }
+  //   } catch (error) {
+  //     this.logger.error(`Publish failed for post ${post.id}:`, error.stack);
+  //     await this.markPostAsFailed(post.id, error.message);
+  //     throw error;
+  //   }
+  // }
+
+  /**
+   * Mark post as successfully published
+   */
+  private async markPostAsPublished(
+    postId: string,
+    platformPostId?: string,
+  ): Promise<void> {
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        status: PostStatus.PUBLISHED,
+        publishedAt: new Date(),
+        queueStatus: 'COMPLETED',
+        errorMessage: null,
+        retryCount: 0,
+        jobId: null,
+      },
+    });
+
+    this.logger.log(`✅ Post ${postId} published successfully`);
+  }
+
+  /**
+   * Mark post as failed with retry logic
+   */
+  private async markPostAsFailed(
+    postId: string,
+    errorMessage?: string,
+  ): Promise<void> {
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      select: { retryCount: true, maxRetries: true, status: true },
+    });
+
+    if (!post) {
+      this.logger.warn(`Post ${postId} not found when marking as failed`);
+      return;
     }
 
-    return this.prisma.postApproval.findMany({
-      where,
-      include: {
-        post: {
-          include: {
-            author: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                email: true,
-              },
-            },
-            socialAccount: true,
-          },
-        },
-        requester: { select: { id: true, firstName: true, lastName: true } },
+    const maxRetries = post.maxRetries || this.MAX_RETRIES;
+    const newRetryCount = (post.retryCount || 0) + 1;
+    const shouldRetry = newRetryCount < maxRetries;
+
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        status: shouldRetry ? PostStatus.FAILED : PostStatus.FAILED,
+        queueStatus: shouldRetry ? 'RETRYING' : 'FAILED',
+        errorMessage: errorMessage?.substring(0, 1000),
+        retryCount: newRetryCount,
       },
-      orderBy: { requestedAt: 'desc' },
     });
+
+    const status = shouldRetry ? 'RETRYING' : 'FAILED';
+    this.logger.warn(
+      `❌ Post ${postId} marked as ${status} (attempt ${newRetryCount}/${maxRetries}): ${errorMessage}`,
+    );
   }
 }

@@ -30,13 +30,19 @@ export class UpdatePostDto {
   })
   @IsOptional()
   @IsDateString()
-  scheduledAt?: Date;
+  scheduledAt?: string;
 
   @ApiPropertyOptional({
-    description: 'Status of the post (e.g., DRAFT, SCHEDULED, PUBLISHED, FAILED)',
+    description:
+      'Status of the post (e.g., DRAFT, SCHEDULED, PUBLISHED, FAILED)',
     example: 'SCHEDULED',
   })
   @IsOptional()
   @IsString()
   status?: PostStatus;
+
+  @ApiPropertyOptional({ description: 'Updated media file IDs' })
+  @IsOptional()
+  @IsArray()
+  mediaFileIds?: string[];
 }

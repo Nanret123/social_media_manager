@@ -15,6 +15,7 @@ import { Platform } from '@prisma/client';
 import { Response, Request } from 'express';
 import { IncomingHttpHeaders } from 'http';
 import { WebhookQueueService } from './queues/webhook-queue.service';
+import { Public } from 'src/auth/decorators/public.decorator';
 
 /**
  * Utility to flatten HTTP headers (convert string[] values to single string)
@@ -37,6 +38,7 @@ function flattenHeaders(headers: IncomingHttpHeaders): Record<string, string> {
 }
 
 @Controller('webhooks')
+@Public()
 export class WebhookController {
   private readonly logger = new Logger(WebhookController.name);
 
@@ -52,15 +54,15 @@ export class WebhookController {
   @Get(':platform')
   @HttpCode(HttpStatus.OK)
   async handleVerification(
-    @Param('platform') platform: Platform,
+    @Param('platform') platform: string,
     @Query() query: any,
     @Res() res: Response,
   ): Promise<Response> {
     this.logger.debug(`[${platform}] Verification request received`);
-
+    const platformEnum = platform.toUpperCase() as Platform;
     try {
       const challengeResponse = this.webhookService.handleVerificationRequest(
-        platform,
+        platformEnum,
         query,
         null,
       );
@@ -87,18 +89,18 @@ export class WebhookController {
 
   /**
    * POST endpoint for receiving webhook events
-   * CRITICAL: This method must return HTTP 200 within seconds to acknowledge receipt.
    * All processing happens asynchronously in the background via a queue.
    */
   @Post(':platform')
   @HttpCode(HttpStatus.OK)
   async handleWebhookEvent(
-    @Param('platform') platform: Platform,
+    @Param('platform') platform: string,
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<Response> {
     const startTime = Date.now();
     this.logger.debug(`[${platform}] Webhook event received`);
+    const platformEnum = platform.toUpperCase() as Platform;
 
     try {
       // Get raw body for signature verification (requires body-parser middleware)
@@ -108,7 +110,7 @@ export class WebhookController {
           `[${platform}] Raw body not available. Middleware configuration issue.`,
         );
         // Fallback to stringified JSON (less secure for signature verification)
-        return this.handleWebhookWithoutRawBody(platform, req, res);
+        return this.handleWebhookWithoutRawBody(platformEnum, req, res);
       }
 
       // Flatten headers to handle string[] values
@@ -116,7 +118,7 @@ export class WebhookController {
 
       // 1. Verify signature synchronously (must be fast)
       const isValid = await this.webhookService.verifyWebhookSignature(
-        platform,
+        platformEnum,
         rawBody,
         flattenedHeaders,
       );
@@ -131,7 +133,7 @@ export class WebhookController {
 
       // 2. Add to queue for asynchronous processing and return immediately
       await this.webhookQueueService.addWebhookJob({
-        platform,
+        platform: platformEnum,
         rawBody,
         headers: flattenedHeaders,
         parsedBody: req.body,

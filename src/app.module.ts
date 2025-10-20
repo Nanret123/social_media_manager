@@ -13,7 +13,6 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsModule } from './role-permissions/permissions.module';
 import { UserModule } from './user/user.module';
-import { SocialPostingModule } from './social-posting/social-posting.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { SchedulingModule } from './scheduling/scheduling.module';
 import { BillingModule } from './billing/billing.module';
@@ -30,6 +29,9 @@ import { PollingModule } from './polling/polling.module';
 import { SocialAccountModule } from './social-account/social-account.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { MetaModule } from './social-integration/meta/meta.module';
+import { PostPublishingModule } from './post-publishing/post-publishing.module';
+import { SocialSchedulerModule } from './social-scheduler/social-scheduler.module';
+import { BullBoardModule } from './common/bull-boad/bull-board.module';
 
 
 @Module({
@@ -55,7 +57,6 @@ import { MetaModule } from './social-integration/meta/meta.module';
     RedisModule,
 
     PostsModule,
-
 
     AiModule,
 
@@ -93,11 +94,16 @@ import { MetaModule } from './social-integration/meta/meta.module';
 
     ApprovalsModule,
 
-    SocialPostingModule,
-
     UserModule,
 
     PermissionsModule,
+
+    PostPublishingModule,
+
+
+    SocialSchedulerModule,
+
+    BullBoardModule, 
   ],
   controllers: [AppController],
   providers: [AppService,

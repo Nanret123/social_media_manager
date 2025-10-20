@@ -127,7 +127,7 @@ model PageAccount {
   updatedAt DateTime @updatedAt
   
   // A page can have posts, metrics, etc.
-  // posts            Post[]
+   posts            Post[]
   // EngagementMetric EngagementMetric[]
   // conversations    Conversation[]
   
@@ -140,14 +140,13 @@ model Post {
   id              String     @id @default(cuid())
   authorId        String?
   socialAccountId String
+  pageAccountId   String?
   content         String
   mediaFileIds    String[]
-  scheduledAt     DateTime?
+  scheduledAt     String?
+  timezone        String
   publishedAt     DateTime?
-  requesterId     String?
-  approverId      String?
   status          PostStatus @default(DRAFT)
-  platformPostId  String?
   errorMessage    String?
   retryCount      Int        @default(0)
   metadata        Json?
@@ -156,9 +155,14 @@ model Post {
 
   maxRetries Int @default(3)
 
+    // Platform metadata
+  platformPostId  String?    // ID returned by platform after publishing
+  
+
   // RELATIONS
   author        User?           @relation(fields: [authorId], references: [id], onDelete: Cascade)
   socialAccount SocialAccount   @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  pageAccount   PageAccount?    @relation(fields: [pageAccountId], references: [id], onDelete: Cascade)
   approvals     PostApproval[]
   analytics     PostAnalytics[]
 

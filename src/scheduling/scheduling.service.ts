@@ -1,9 +1,13 @@
 import { InjectQueue } from '@nestjs/bull';
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Platform, ScheduleJobStatus } from '@prisma/client';
-import { Queue } from 'bull';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Platform, PostStatus } from '@prisma/client';
+import { Queue, Job } from 'bullmq';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { SocialPostingService } from 'src/social-posting/social-posting.service';
 
 export interface PlatformPost {
   content: string;
@@ -33,26 +37,10 @@ export interface IPlatformClient {
   validateCredentials(accountId: string): Promise<boolean>;
 }
 
-export interface PostMetadata {
+interface PostMetadata {
   options?: Record<string, any>;
-  // you can add more fields as needed
-  hashtags?: string[];
-  mentions?: string[];
-  linkPreview?: boolean;
+  [key: string]: any;
 }
-
-// Queue-related types
-export interface SchedulePostData {
-  postId: string;
-  organizationId: string;
-  platform: Platform;
-  accountId: string;
-  content: string;
-  mediaFileIds?: string[];
-  scheduledAt: Date;
-  options?: Record<string, any>;
-}
-
 
 @Injectable()
 export class SchedulingService {
@@ -61,161 +49,115 @@ export class SchedulingService {
   constructor(
     @InjectQueue('post-scheduling') private readonly postQueue: Queue,
     private readonly prisma: PrismaService,
-    private readonly socialPostingService: SocialPostingService,
   ) {}
 
-async schedulePost(data: SchedulePostData) {
-    const delay = data.scheduledAt.getTime() - Date.now();
-    if (delay <= 0) throw new BadRequestException('Scheduled time must be in the future');
+  /**
+   * Schedule a post for future publishing
+   * Note: Post record should be created BEFORE calling this method
+   */
+  async schedulePost(postId: string): Promise<Job> {
+    //get the post details
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+    })
+    if (!post) {
+      throw new NotFoundException(`Post ${postId} not found`);
+    }
+    // Validate scheduled time
+    const delay = new Date(post.scheduledAt).getTime() - Date.now();
+    if (delay <= 0) {
+      throw new BadRequestException('Scheduled time must be in the future');
+    }
 
-    // Create post record first
-    const post = await this.prisma.post.create({
+    // Add job to queue with retry configuration
+    const job = await this.postQueue.add('publish-post', post, {
+      delay,
+      jobId: postId, // Use postId as jobId for idempotency
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 5000,
+      },
+      removeOnComplete: {
+        age: 24 * 3600, // Keep for 24 hours
+        count: 1000,
+      },
+      removeOnFail: false, // Keep failed jobs for debugging
+    });
+
+    // Update post with job reference
+    await this.prisma.post.update({
+      where: { id: postId },
       data: {
-        id: data.postId,
-        organizationId: data.organizationId,
-        socialAccountId: data.accountId,
-        content: data.content,
-        mediaFileIds: data.mediaFileIds || [],
-        scheduledAt: data.scheduledAt,
-        status: 'SCHEDULED',
-        metadata: data.options ? { options: data.options } : undefined,
+        jobId: job.id,
+        queueStatus: 'QUEUED',
       },
     });
 
-    // Add to queue
-    const job = await this.postQueue.add('publish-post', data, {
-      delay,
-      jobId: data.postId,
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
-      removeOnComplete: true,
-      removeOnFail: false,
-    });
+    this.logger.log(
+      `📅 Scheduled post ${postId} for ${post.scheduledAt} (delay: ${Math.round(delay / 1000)}s)`,
+    );
 
-    // Update post with job ID
-    await this.prisma.post.update({
-      where: { id: data.postId },
-      data: { jobId: job.id.toString() },
-    });
-
-    this.logger.log(`📅 Scheduled post ${data.postId} for ${data.scheduledAt}`);
     return job;
   }
 
-  async cancelScheduledPost(postId: string) {
-    const post = await this.prisma.post.findUnique({ where: { id: postId } });
-    if (!post) throw new NotFoundException('Post not found');
-
-    if (post.jobId) {
-      const job = await this.postQueue.getJob(post.jobId);
-      if (job) {
-        await job.remove();
-        this.logger.log(`🛑 Cancelled scheduled job ${post.jobId}`);
-      }
-    }
-
-    await this.prisma.post.update({
-      where: { id: postId },
-      data: { status: 'CANCELED' },
-    });
-  }
-
-  async reschedulePost(postId: string, newScheduledAt: Date) {
+  /**
+   * Cancel a scheduled post
+   */
+  async cancelScheduledPost(postId: string): Promise<void> {
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
-      include: { socialAccount: true },
+      select: { id: true, jobId: true, status: true },
     });
-    if (!post) throw new NotFoundException('Post not found');
-    if (post.status !== 'SCHEDULED') {
-      throw new BadRequestException('Only scheduled posts can be rescheduled');
+
+    if (!post) {
+      throw new NotFoundException('Post not found');
     }
 
-    // Cancel existing job
-    if (post.jobId) {
-      const job = await this.postQueue.getJob(post.jobId);
-      if (job) await job.remove();
-    }
-
-    // Build new schedule data
-    const scheduleData: SchedulePostData = {
-      postId: post.id,
-      organizationId: post.organizationId,
-      platform: post.socialAccount.platform as Platform,
-      accountId: post.socialAccount.id,
-      content: post.content,
-      mediaFileIds: post.mediaFileIds || [],
-      scheduledAt: newScheduledAt,
-      options: (post.metadata as PostMetadata)?.options,
-    };
-
-    return this.schedulePost(scheduleData);
-  }
-
-  async getQueueStats() {
-    const [waiting, active, completed, failed, delayed] = await Promise.all([
-      this.postQueue.getWaitingCount(),
-      this.postQueue.getActiveCount(),
-      this.postQueue.getCompletedCount(),
-      this.postQueue.getFailedCount(),
-      this.postQueue.getDelayedCount(),
-    ]);
-    return { waiting, active, completed, failed, delayed };
-  }
-
-  async publishImmediately(data: Omit<SchedulePostData, 'scheduledAt'>) {
-    return this.executePublish(data.postId, {
-      organizationId: data.organizationId,
-      platform: data.platform,
-      accountId: data.accountId,
-      content: data.content,
-      mediaFileIds: data.mediaFileIds,
-      options: data.options,
-    });
-  }
-
-  async publishScheduledPost(postId: string) {
-    const post = await this.getPostWithAccount(postId);
-    return this.executePublish(postId, {
-      organizationId: post.organizationId,
-      platform: post.socialAccount.platform,
-      accountId: post.socialAccount.id,
-      content: post.content,
-      mediaFileIds: post.mediaFileIds,
-      options: (post.metadata as PostMetadata)?.options,
-    });
-  }
-
-  /** Core publishing logic used by both immediate + scheduled posts */
-  private async executePublish(
-    postId: string,
-    postData: {
-      organizationId: string;
-      platform: Platform;
-      accountId: string;
-      content: string;
-      mediaFileIds?: string[];
-      options?: Record<string, any>;
-    },
-  ) {
-    try {
-      const result = await this.socialPostingService.publishPost(
-        postData.organizationId,
-        postData,
+    if (post.status !== PostStatus.SCHEDULED) {
+      throw new BadRequestException(
+        `Post is ${post.status}, cannot cancel. Only SCHEDULED posts can be cancelled.`,
       );
-
-      if (result.success) {
-        await this.markPostAsPublished(postId, result.platformPostId);
-      } else {
-        await this.markPostAsFailed(postId, result.error);
-      }
-      return result;
-    } catch (error) {
-      await this.markPostAsFailed(postId, error.message);
-      throw error;
     }
+
+    // Remove job from queue if exists
+    if (post.jobId) {
+      try {
+        const job = await this.postQueue.getJob(post.jobId);
+        if (job) {
+          await job.remove();
+          this.logger.log(`🛑 Removed job ${post.jobId} from queue`);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to remove job ${post.jobId}: ${error.message}`,
+        );
+        // Continue with post status update even if job removal fails
+      }
+    }
+
+    // Update post status
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        status: PostStatus.CANCELED,
+        queueStatus: 'CANCELLED',
+        jobId: null,
+      },
+    });
+
+    this.logger.log(`✅ Cancelled post ${postId}`);
   }
 
-  private async getPostWithAccount(postId: string) {
+  /**
+   * Reschedule a post to a new time
+   */
+  async reschedulePost(postId: string, newScheduledAt: Date): Promise<Job> {
+    // Validate new scheduled time
+    if (newScheduledAt <= new Date()) {
+      throw new BadRequestException('New scheduled time must be in the future');
+    }
+
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
       include: {
@@ -223,76 +165,119 @@ async schedulePost(data: SchedulePostData) {
           select: {
             id: true,
             platform: true,
-            platformAccountId: true,
-            accessToken: true,
-            isActive: true,
           },
         },
       },
     });
-    if (!post) throw new NotFoundException(`Post with ID ${postId} not found`);
-    if (!post.socialAccount) {
-      throw new BadRequestException(`Post ${postId} has no associated social account`);
-    }
-    if (!post.socialAccount.isActive) {
-      throw new BadRequestException(`Social account for post ${postId} is inactive`);
-    }
-    return post;
-  }
 
-  private async markPostAsPublished(postId: string, platformPostId?: string) {
-    const updatedPost = await this.prisma.post.update({
+    if (!post) {
+      throw new NotFoundException('Post not found');
+    }
+
+    if (post.status !== PostStatus.SCHEDULED) {
+      throw new BadRequestException(
+        `Cannot reschedule post with status ${post.status}. Only SCHEDULED posts can be rescheduled.`,
+      );
+    }
+
+    // Cancel existing job
+    if (post.jobId) {
+      try {
+        const job = await this.postQueue.getJob(post.jobId);
+        if (job) {
+          await job.remove();
+          this.logger.log(`🔄 Removed old job ${post.jobId} for rescheduling`);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to remove old job during reschedule: ${error.message}`,
+        );
+      }
+    }
+
+    // Update post scheduled time
+    await this.prisma.post.update({
       where: { id: postId },
       data: {
-        status: 'PUBLISHED',
-        publishedAt: new Date(),
-        platformPostId,
-        queueStatus: 'COMPLETED',
-        errorMessage: null,
-        retryCount: 0,
-      },
-      include: {
-        socialAccount: { select: { platform: true, username: true } },
-        author: { select: { firstName: true, lastName: true, email: true } },
+        scheduledAt: newScheduledAt.toISOString(),
+        jobId: null, // Will be set by schedulePost
       },
     });
+
 
     this.logger.log(
-      `✅ Post ${postId} marked as published on ${updatedPost.socialAccount.platform}`,
+      `🔄 Rescheduling post ${postId} from ${post.scheduledAt} to ${newScheduledAt.toISOString()}`,
     );
-    return updatedPost;
+
+    return this.schedulePost(postId);
   }
 
-  private async markPostAsFailed(postId: string, errorMessage?: string) {
-    const post = await this.prisma.post.findUnique({
-      where: { id: postId },
-      select: { retryCount: true, maxRetries: true },
-    });
-    if (!post) {
-      this.logger.warn(`Post ${postId} not found when marking as failed`);
-      return;
+  /**
+   * Get queue statistics
+   */
+  async getQueueStats() {
+    const [waiting, active, completed, failed, delayed, paused] =
+      await Promise.all([
+        this.postQueue.getWaitingCount(),
+        this.postQueue.getActiveCount(),
+        this.postQueue.getCompletedCount(),
+        this.postQueue.getFailedCount(),
+        this.postQueue.getDelayedCount(),
+        this.postQueue.isPaused(),
+      ]);
+
+    return {
+      waiting,
+      active,
+      completed,
+      failed,
+      delayed,
+      paused,
+      total: waiting + active + delayed,
+    };
+  }
+
+  /**
+   * Get detailed information about a specific job
+   */
+  async getJobDetails(jobId: string): Promise<Job | null> {
+    try {
+      const job = await this.postQueue.getJob(jobId);
+      return job;
+    } catch (error) {
+      this.logger.error(`Failed to fetch job ${jobId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Retry a failed job
+   */
+  async retryFailedJob(jobId: string): Promise<void> {
+    const job = await this.postQueue.getJob(jobId);
+
+    if (!job) {
+      throw new NotFoundException(`Job ${jobId} not found`);
     }
 
-    const maxRetries = post.maxRetries || 3;
-    const newRetryCount = (post.retryCount || 0) + 1;
-    const finalStatus = newRetryCount >= maxRetries ? 'FAILED' : 'RETRYING';
+    const state = await job.getState();
+    if (state !== 'failed') {
+      throw new BadRequestException(
+        `Job is ${state}, cannot retry. Only failed jobs can be retried.`,
+      );
+    }
 
-    const updatedPost = await this.prisma.post.update({
-      where: { id: postId },
-      data: {
-        status: finalStatus,
-        queueStatus: finalStatus === 'FAILED' ? 'FAILED' : 'RETRYING',
-        errorMessage: errorMessage?.substring(0, 1000),
-        retryCount: newRetryCount,
-      },
-      include: {
-        socialAccount: { select: { platform: true, username: true } },
-      },
-    });
+    await job.retry();
+    this.logger.log(`🔁 Retrying failed job ${jobId}`);
+  }
 
-    this.logger.warn(
-      `❌ Post ${postId} marked as ${finalStatus} on ${updatedPost.socialAccount.platform}: ${errorMessage}`,
-    );
-    return updatedPost;
+  /**
+   * Clean old completed jobs
+   */
+  async cleanCompletedJobs(
+    olderThanMs: number = 24 * 60 * 60 * 1000,
+  ): Promise<void> {
+    await this.postQueue.clean(olderThanMs, 100, 'completed');
+    this.logger.log(`🧹 Cleaned completed jobs older than ${olderThanMs}ms`);
   }
 }

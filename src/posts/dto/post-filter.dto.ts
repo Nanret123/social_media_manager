@@ -1,35 +1,49 @@
-import { IsEnum, IsInt, IsOptional, IsString, IsDateString, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import {
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsDateString,
+  Min,
+  IsUUID,
+} from 'class-validator';
 import { Platform, PostStatus } from '@prisma/client';
+import { PaginationDto } from 'src/common/dtos/pagination.dto';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 
-export class PostFilterDto {
+export class PostFilterDto extends PaginationDto {
+  @ApiPropertyOptional({
+    enum: PostStatus,
+    description: 'Filter by post status',
+  })
   @IsOptional()
   @IsEnum(PostStatus)
   status?: PostStatus;
 
+  @ApiPropertyOptional({
+    enum: Platform,
+    description: 'Filter by social platform',
+  })
   @IsOptional()
   @IsEnum(Platform)
   platform?: Platform;
 
+  @ApiPropertyOptional({ description: 'Filter by author ID' })
   @IsOptional()
-  @IsDateString()
-  startDate?: string;
-
-  @IsOptional()
-  @IsDateString()
-  endDate?: string;
-
-  @IsOptional()
-  @IsString()
+  @IsUUID()
   authorId?: string;
 
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page: number = 1;
+  @ApiPropertyOptional({
+    description: 'Start date for scheduled or created posts',
+  })
+  @IsOptional()
+  @IsDateString()
+  startDate?: Date;
 
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  limit: number = 10;
+  @ApiPropertyOptional({
+    description: 'End date for scheduled or created posts',
+  })
+  @IsOptional()
+  @IsDateString()
+  endDate?: Date;
 }

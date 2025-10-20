@@ -130,6 +130,7 @@ export class MediaService {
 
     // 4. Return the uploaded URLs
     return uploads.map((u) => ({
+      fileId: u.id,
       url: u.secure_url,
       publicId: u.public_id,
     }));

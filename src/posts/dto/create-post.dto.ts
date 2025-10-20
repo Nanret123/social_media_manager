@@ -1,61 +1,69 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsOptional, IsArray, IsUUID, IsBoolean } from 'class-validator';
+import { ContentType, Platform } from '@prisma/client';
+import {
+  IsString,
+  IsOptional,
+  IsArray,
+  IsUUID,
+  IsBoolean,
+  IsEnum,
+} from 'class-validator';
 
 export class CreatePostDto {
-  @ApiProperty({ description: 'Organization ID this post belongs to' })
-  @IsUUID()
-  organizationId: string;
-
-  @ApiProperty({ description: 'User ID creating the post' })
-  @IsUUID()
-  userId: string;
-
   @ApiProperty({ description: 'Social account to publish under' })
-  @IsUUID()
+  @IsString()
   socialAccountId: string;
 
   @ApiProperty({ description: 'Main content of the post' })
   @IsString()
   content: string;
 
-  @ApiProperty({ description: 'Media URLs', required: false, type: [String] })
-  @IsOptional()
-  @IsArray()
-  mediaUrls?: string[];
-
-  @ApiProperty({ description: 'Media file IDs already uploaded', required: false })
+  @ApiProperty({
+    description: 'Media file IDs already uploaded',
+    required: false,
+  })
   @IsOptional()
   @IsArray()
   mediaFileIds?: string[];
 
-  @ApiProperty({ description: 'Whether post requires approval workflow', default: false })
+  @ApiProperty({
+    description: 'AI content ID if generated via AI',
+    required: false,
+  })
   @IsOptional()
-  @IsBoolean()
-  requiresApproval?: boolean;
-
-  @ApiProperty({ description: 'AI content ID if generated via AI', required: false })
-  @IsOptional()
-  @IsUUID()
+  @IsString()
   aiContentId?: string;
+  @ApiProperty({
+    enum: Platform,
+    description: 'Platform to publish on',
+    example: Platform.FACEBOOK,
+  })
+  @IsEnum(Platform)
+  platform: Platform;
 
-  @ApiProperty({ description: 'Platform (facebook, instagram, x, linkedin)' })
-  @IsString()
-  platform: string;
+  @ApiProperty({
+    enum: ContentType,
+    description: 'Content type (text, image, video, etc.)',
+    example: ContentType.POST,
+  })
+  @IsEnum(ContentType)
+  contentType: ContentType;
 
-  @ApiProperty({ description: 'Content type (post, story, reel, etc.)' })
-  @IsString()
-  contentType: string;
-
-  @ApiProperty({ description: 'Extra metadata like hashtags, mentions', required: false })
+  @ApiProperty({
+    description: 'Extra metadata like hashtags, mentions',
+    required: false,
+  })
   @IsOptional()
   metadata?: Record<string, any>;
 
   @ApiProperty({ description: 'Scheduled time for the post', required: false })
   @IsOptional()
-  scheduledAt?: Date;
+  scheduledAt?: string;
 
-  @ApiProperty({ description: 'Flag to publish immediately without scheduling', required: false, default: false })
-  @IsOptional()
-  @IsBoolean()
-  publishImmediately?: boolean; // internal use only
+  @ApiProperty({
+    description: 'Timezone of the scheduled time',
+    example: 'Africa/Lagos',
+  })
+  @IsString()
+   timezone: string;
 }

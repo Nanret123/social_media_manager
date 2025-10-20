@@ -1,11 +1,13 @@
 import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { ApprovalsService } from './approvals.service';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { ApprovalRequestDto } from './dtos/approval-request.dto';
 import { ApprovalActionDto } from './dtos/approval-action.dto';
+import { GetApprovalsFilterDto } from './dtos/get-approval.dto';
 
 @ApiTags('Approvals')
-@Controller('approvals')
+@ApiBearerAuth()
+@Controller('post/approvals')
 export class ApprovalsController {
   constructor(private readonly approvalsService: ApprovalsService) {}
 
@@ -13,58 +15,68 @@ export class ApprovalsController {
   @ApiOperation({ summary: 'Request approval for a draft post' })
   @ApiResponse({ status: 201, description: 'Approval request created' })
   async requestApproval(@Body() dto: ApprovalRequestDto, @Req() req) {
-    return this.approvalsService.requestApproval(
+    return this.approvalsService.createApprovalRequest(
       dto.postId,
       req.user.id,
-      dto.organizationId,
     );
   }
 
-  @Post('approve')
+  @Post(':postId/approve')
   @ApiOperation({ summary: 'Approve a pending post' })
   @ApiResponse({ status: 200, description: 'Post approved' })
-  async approvePost(@Body() dto: ApprovalActionDto, @Req() req) {
+  async approvePost(@Param('postId') postId: string,  @Body() dto: ApprovalActionDto, @Req() req) {
     return this.approvalsService.approvePost(
-      dto.postId,
+      postId,
       req.user.id,
       dto.comments,
     );
   }
 
-  @Post('reject')
+  @Post(':postId/reject')
   @ApiOperation({ summary: 'Reject a pending post' })
   @ApiResponse({ status: 200, description: 'Post rejected' })
-  async rejectPost(@Body() dto: ApprovalActionDto, @Req() req) {
+  async rejectPost(@Param('postId') postId: string, @Body() dto: ApprovalActionDto, @Req() req) {
     return this.approvalsService.rejectPost(
-      dto.postId,
+      postId,
       req.user.id,
       dto.comments,
       dto.revisionNotes,
     );
   }
 
-  @Post('request-changes')
+  @Post(':postId/request-changes')
   @ApiOperation({ summary: 'Request changes for a pending post' })
   @ApiResponse({ status: 200, description: 'Changes requested' })
-  async requestChanges(@Body() dto: ApprovalActionDto, @Req() req) {
+  async requestChanges(@Param('postId') postId: string, @Body() dto: ApprovalActionDto, @Req() req) {
     return this.approvalsService.requestChanges(
-      dto.postId,
+      postId,
       req.user.id,
       dto.comments,
       dto.revisionNotes,
     );
   }
 
-  @Get('pending/:organizationId')
-  @ApiOperation({ summary: 'Get pending approvals for an organization' })
-  @ApiResponse({ status: 200, description: 'List of pending approvals' })
-  async getPendingApprovals(
+  @Get()
+  @ApiOperation({
+    summary: 'Get all approvals with optional filters',
+    description:
+      'Retrieve all approvals with pagination and filtering options. Includes related post, requester, and approver data.',
+  })
+  async getApprovals(
     @Param('organizationId') organizationId: string,
-    @Query('approverId') approverId?: string,
+    @Query() filters: GetApprovalsFilterDto,
   ) {
-    return this.approvalsService.getPendingApprovals(
-      organizationId,
-      approverId,
-    );
+    return this.approvalsService.getApprovals(organizationId, filters);
+  }
+
+  @Get(':id')
+  @ApiOperation({
+    summary: 'Get a specific approval by ID',
+    description:
+      'Retrieve full approval details including post, requester, and approver information.',
+  })
+  @ApiParam({ name: 'id', description: 'Approval ID', type: String })
+  async getApprovalById(@Param('id') id: string, @Param('organizationId') organizationId: string,) {
+    return this.approvalsService.getApprovalById(id, organizationId);
   }
 }

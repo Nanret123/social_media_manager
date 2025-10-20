@@ -206,7 +206,7 @@ export class ApprovalsService {
         post.scheduledAt &&
         new Date(post.scheduledAt).getTime() > Date.now()
       ) {
-        await this.schedulingService.schedulePost(post);
+        await this.schedulingService.schedulePost(post.id);
 
         await this.prisma.post.update({
           where: { id: post.id },
@@ -218,7 +218,7 @@ export class ApprovalsService {
         );
       } else {
         // Publish immediately
-        await this.schedulingService.publishImmediately(post);
+        await this.schedulingService.publishImmediately(post.id);
         this.logger.log(
           `🚀 Post ${postId} published immediately after approval`,
         );

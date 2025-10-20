@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import {
   Platform,
@@ -35,8 +35,10 @@ export class SocialSchedulerService {
   }
 
   async schedulePost(
-    post: Post,
+    postId: string,
   ): Promise<{ success: boolean; jobId?: string; error?: string }> {
+       //get post
+      const post = await this.fetchPost(postId);
     try {
       // Determine target platform from post metadata
       const targetPlatform = this.getTargetPlatform(post);
@@ -64,8 +66,10 @@ export class SocialSchedulerService {
   }
 
   async publishImmediately(
-    post: any,
+    postId: string,
   ): Promise<{ success: boolean; error?: string }> {
+       //get post
+      const post = await this.fetchPost(postId);
     try {
       console.log(post)
       const targetPlatform = this.getTargetPlatform(post);
@@ -639,4 +643,23 @@ export class SocialSchedulerService {
 
     return service;
   }
+
+private async fetchPost(postId: string): Promise<any> {
+  const post = await this.prisma.post.findUnique({
+    where: { id: postId },
+    include: {
+      socialAccount: {
+        include: {
+          pages: true,
+        },
+      },
+    },
+  });
+
+  if (!post) {
+    throw new NotFoundException(`Post ${postId} not found`);
+  }
+
+  return post;
+}
 }

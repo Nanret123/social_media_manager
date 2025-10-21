@@ -56,7 +56,7 @@ export class CreatePostDto {
   @IsOptional()
   metadata?: Record<string, any>;
 
-  @ApiProperty({ description: 'Scheduled time for the post', required: false })
+  @ApiProperty({ description: 'Scheduled time for the post', required: false, example: "2025-10-21T14:30:00.000" })
   @IsOptional()
   scheduledAt?: string;
 

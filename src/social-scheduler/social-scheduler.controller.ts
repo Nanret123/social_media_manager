@@ -1,4 +1,11 @@
-import { Controller, Delete, Param } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { SocialSchedulerService } from './social-scheduler.service';
 import {
   ApiBearerAuth,
@@ -12,6 +19,39 @@ import {
 @ApiBearerAuth()
 export class SocialSchedulerController {
   constructor(private readonly service: SocialSchedulerService) {}
+
+  @Post(':postId/schedule')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Schedule a post',
+    description:
+      'Schedules a post (text, image, or video) to be published at a specific time on a Facebook Page using the Page access token.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Post successfully scheduled',
+  })
+  @ApiResponse({ status: 500, description: 'Failed to schedule post' })
+  async schedulePost(@Param('postId') postId: string) {
+    return this.service.schedulePost(postId);
+  }
+
+  @Post('publish')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Publish a Facebook Page post immediately',
+    description:
+      'Publishes a post (text, image, or video) instantly on a Facebook Page using the Page access token.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Post successfully published',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid parameters' })
+  @ApiResponse({ status: 500, description: 'Failed to publish post' })
+  async publishImmediately(@Param('postId') postId: string) {
+    return this.service.publishImmediately(postId);
+  }
 
   @Delete(':postId/:organizationId/cancel')
   @ApiOperation({
@@ -30,7 +70,10 @@ export class SocialSchedulerController {
       },
     },
   })
-  async cancelScheduledPost(@Param('postId') postId: string, @Param('organizationId') organizationId: string) {
+  async cancelScheduledPost(
+    @Param('postId') postId: string,
+    @Param('organizationId') organizationId: string,
+  ) {
     return this.service.cancelScheduledPost(postId, organizationId);
   }
 }

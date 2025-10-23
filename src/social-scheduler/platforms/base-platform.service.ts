@@ -16,7 +16,7 @@ export abstract class BasePlatformService {
   abstract schedulePost(post: ScheduledPost): Promise<PublishingResult>;
   abstract publishImmediately(post: ScheduledPost): Promise<PublishingResult>;
   abstract deleteScheduledPost(postId: string, accessToken: string): Promise<boolean>;
-  abstract validateCredentials(accessToken: string): Promise<boolean>;
+  //abstract validateCredentials(accessToken: string): Promise<boolean>;
   
   protected handleError(error: any, operation: string): PublishingResult {
     const errorMessage = this.extractErrorMessage(error);

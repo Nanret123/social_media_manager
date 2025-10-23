@@ -7,7 +7,6 @@ import {
   PublishingResult,
 } from '../interfaces/social-scheduler.interface';
 import { BasePlatformService } from './base-platform.service';
-import { addMinutes } from 'date-fns';
 
 @Injectable()
 export class FacebookPlatformService extends BasePlatformService {
@@ -28,30 +27,20 @@ export class FacebookPlatformService extends BasePlatformService {
     return this.makeApiRequest(async () => {
       const { accessToken, pageId } = post.metadata;
       this.validateFacebookPost(post, true);
+      
 
-      const mediaAttachments = await this.handleMediaUpload(
-        pageId,
-        post.mediaUrls,
-        accessToken,
-      );
+      const mediaType = this.detectMediaType(post.mediaUrls?.[0] || '');
 
-      const params = this.buildScheduleParams(
-        post,
-        accessToken,
-        mediaAttachments,
-      );
+      if (mediaType === 'video') {
+        return this.scheduleVideoPost(post, accessToken, pageId);
+      }
 
-      const url = `${this.baseUrl}/${pageId}/feed`;
-      const response = await firstValueFrom(
-        this.http.post(url, null, { params, timeout: this.requestTimeout }),
-      );
+      if (mediaType === 'photo') {
+        return this.schedulePhotoPost(post, accessToken, pageId);
+      }
 
-      return {
-        success: true,
-        platformPostId: response.data.id,
-        publishedAt: post.scheduledAt,
-        metadata: response.data,
-      };
+      // Handle text-only posts
+      return this.scheduleTextPost(post, accessToken, pageId);
     }, 'schedule Facebook post');
   }
 
@@ -59,36 +48,211 @@ export class FacebookPlatformService extends BasePlatformService {
   async publishImmediately(post: ScheduledPost): Promise<PublishingResult> {
     return this.makeApiRequest(async () => {
       const { accessToken, pageId } = post.metadata;
-      this.validateFacebookPost(post, !!pageId);
-      console.log(`Publishing Facebook post immediately:`, post);
-      const url = pageId
-        ? `${this.baseUrl}/${pageId}/feed`
-        : `${this.baseUrl}/me/feed`;
+      this.validateFacebookPost(post, true);
 
-      const mediaAttachments = await this.handleMediaUpload(
-        pageId,
-        post.mediaUrls,
-        accessToken,
-      );
+      const mediaType = this.detectMediaType(post.mediaUrls?.[0] || '');
 
-      const params = this.buildPublishParams(
-        post,
-        accessToken,
-        mediaAttachments,
-      );
+      if (mediaType === 'video') {
+        return this.publishVideoImmediately(post, accessToken, pageId);
+      }
 
-      console.log(`About to publish Facebook post with params:`, params);
-      const response = await firstValueFrom(
-        this.http.post(url, null, { params, timeout: this.requestTimeout }),
-      );
+      if (mediaType === 'photo') {
+        return this.publishPhotoImmediately(post, accessToken, pageId);
+      }
 
-      return {
-        success: true,
-        platformPostId: response.data.id,
-        publishedAt: new Date(),
-        metadata: response.data,
-      };
+      // Handle text-only posts
+      return this.publishTextImmediately(post, accessToken, pageId);
     }, 'publish immediately to Facebook');
+  }
+
+  /** Schedule a Facebook video post */
+  private async scheduleVideoPost(
+    post: ScheduledPost,
+    accessToken: string,
+    pageId: string,
+  ): Promise<PublishingResult> {
+    const videoUrl = post.mediaUrls?.[0];
+    if (!videoUrl) throw new Error('Video URL is required for video posts');
+
+    const uploadUrl = `${this.baseUrl}/${pageId}/videos`;
+    const utcSeconds = Math.floor(new Date(post.scheduledAt).getTime() / 1000);
+
+    const params = {
+      file_url: videoUrl,
+      published: false,
+      scheduled_publish_time: utcSeconds,
+      description: post.content || '',
+      access_token: accessToken,
+    };
+
+    this.logger.log(
+      `Scheduling Facebook video for page ${pageId} at ${utcSeconds}`,
+    );
+
+    const response = await firstValueFrom(
+      this.http.post(uploadUrl, null, {
+        params,
+        timeout: this.uploadTimeout,
+      }),
+    );
+
+    this.logger.log(`Scheduled video upload response: ${response.data.id}`);
+
+    return {
+      success: true,
+      platformPostId: response.data.id,
+      publishedAt: post.scheduledAt,
+      metadata: response.data,
+    };
+  }
+
+  /** Schedule photo post */
+  private async schedulePhotoPost(
+    post: ScheduledPost,
+    accessToken: string,
+    pageId: string,
+  ): Promise<PublishingResult> {
+    const mediaAttachments = await this.handleMediaUpload(
+      pageId,
+      post.mediaUrls,
+      accessToken,
+    );
+
+    const params = this.buildPostScheduleParams(
+      post,
+      accessToken,
+      mediaAttachments,
+    );
+
+    const url = `${this.baseUrl}/${pageId}/feed`;
+
+    const response = await firstValueFrom(
+      this.http.post(url, null, { params, timeout: this.requestTimeout }),
+    );
+
+    this.logger.log(`Scheduled Facebook post response: ${response.data.id}`);
+
+    return {
+      success: true,
+      platformPostId: response.data.id,
+      publishedAt: post.scheduledAt,
+      metadata: response.data,
+    };
+  }
+
+  /** Schedule text-only post */
+  private async scheduleTextPost(
+    post: ScheduledPost,
+    accessToken: string,
+    pageId: string,
+  ): Promise<PublishingResult> {
+    const params = this.buildPostScheduleParams(post, accessToken, []);
+    const url = `${this.baseUrl}/${pageId}/feed`;
+
+    const response = await firstValueFrom(
+      this.http.post(url, null, { params, timeout: this.requestTimeout }),
+    );
+
+    this.logger.log(
+      `Scheduled Facebook text post response: ${response.data.id}`,
+    );
+
+    return {
+      success: true,
+      platformPostId: response.data.id,
+      publishedAt: post.scheduledAt,
+      metadata: response.data,
+    };
+  }
+
+  /** Publish a Facebook video immediately */
+  private async publishVideoImmediately(
+    post: ScheduledPost,
+    accessToken: string,
+    pageId: string,
+  ): Promise<PublishingResult> {
+    const videoUrl = post.mediaUrls?.[0];
+    if (!videoUrl) throw new Error('Video URL is required for video posts');
+
+    const uploadUrl = `${this.baseUrl}/${pageId}/videos`;
+
+    const params = {
+      file_url: videoUrl,
+      published: true,
+      description: post.content || '',
+      access_token: accessToken,
+    };
+
+    this.logger.log(`Publishing video immediately for page ${pageId}`);
+
+    const response = await firstValueFrom(
+      this.http.post(uploadUrl, null, {
+        params,
+        timeout: this.uploadTimeout,
+      }),
+    );
+
+    this.logger.log(`Video publish response: ${response.data.id}`);
+
+    return {
+      success: true,
+      platformPostId: response.data.id,
+      publishedAt: new Date(),
+      metadata: response.data,
+    };
+  }
+
+  /** Publish a Facebook photo immediately */
+  private async publishPhotoImmediately(
+    post: ScheduledPost,
+    accessToken: string,
+    pageId: string,
+  ): Promise<PublishingResult> {
+    const mediaAttachments = await this.handleMediaUpload(
+      pageId,
+      post.mediaUrls,
+      accessToken,
+    );
+
+    const params = this.buildPublishParams(post, accessToken, mediaAttachments);
+
+    const url = `${this.baseUrl}/${pageId}/feed`;
+
+    this.logger.log(`Publishing photo immediately for page ${pageId}`);
+
+    const response = await firstValueFrom(
+      this.http.post(url, null, { params, timeout: this.requestTimeout }),
+    );
+
+    return {
+      success: true,
+      platformPostId: response.data.id,
+      publishedAt: new Date(),
+      metadata: response.data,
+    };
+  }
+
+  /** Publish text-only post immediately */
+  private async publishTextImmediately(
+    post: ScheduledPost,
+    accessToken: string,
+    pageId: string,
+  ): Promise<PublishingResult> {
+    const params = this.buildPublishParams(post, accessToken, []);
+    const url = `${this.baseUrl}/${pageId}/feed`;
+
+    this.logger.log(`Publishing text post immediately for page ${pageId}`);
+
+    const response = await firstValueFrom(
+      this.http.post(url, null, { params, timeout: this.requestTimeout }),
+    );
+
+    return {
+      success: true,
+      platformPostId: response.data.id,
+      publishedAt: new Date(),
+      metadata: response.data,
+    };
   }
 
   /** Delete a scheduled Facebook post */
@@ -111,6 +275,8 @@ export class FacebookPlatformService extends BasePlatformService {
           timeout: this.requestTimeout,
         }),
       );
+
+      this.logger.log(`Successfully deleted scheduled post: ${postId}`);
       return true;
     }, 'delete Facebook scheduled post');
   }
@@ -128,7 +294,10 @@ export class FacebookPlatformService extends BasePlatformService {
           timeout: this.requestTimeout,
         }),
       );
-      return !!response.data?.id;
+
+      const isValid = !!response.data?.id;
+      this.logger.log(`Facebook credential validation: ${isValid}`);
+      return isValid;
     } catch (error) {
       this.logger.warn('Facebook credential validation failed:', error.message);
       return false;
@@ -145,38 +314,39 @@ export class FacebookPlatformService extends BasePlatformService {
       return [];
     }
 
-    return this.uploadMediaToFacebook(pageId, mediaUrls, accessToken);
-  }
+    this.logger.log(
+      `Uploading ${mediaUrls.length} media files to Facebook for page ${pageId}`,
+    );
 
-  /** Upload images, videos, or reels to Facebook */
-  private async uploadMediaToFacebook(
-    pageId: string,
-    mediaUrls: string[],
-    accessToken: string,
-  ): Promise<string[]> {
-    console.log(`Uploading media to Facebook for page ${pageId}:`, mediaUrls);
     const uploadedFbIds: string[] = [];
     const batches = this.createBatches(mediaUrls, this.concurrencyLimit);
 
-    for (const batch of batches) {
+    for (const [batchIndex, batch] of batches.entries()) {
       const results = await Promise.allSettled(
-        batch.map((url) =>
+        batch.map((url, index) =>
           this.uploadSingleMediaFile(pageId, url, accessToken),
         ),
       );
 
       results.forEach((result, index) => {
+        const mediaUrl = batch[index];
         if (result.status === 'fulfilled' && result.value) {
           uploadedFbIds.push(result.value);
+          this.logger.log(
+            `Successfully uploaded media: ${mediaUrl} -> ${result.value}`,
+          );
         } else if (result.status === 'rejected') {
           this.logger.warn(
-            `Failed to upload media at index ${index}: ${batch[index]}`,
+            `Failed to upload media in batch ${batchIndex}, item ${index}: ${mediaUrl}`,
             result.reason,
           );
         }
       });
     }
 
+    this.logger.log(
+      `Successfully uploaded ${uploadedFbIds.length}/${mediaUrls.length} media files`,
+    );
     return uploadedFbIds;
   }
 
@@ -196,13 +366,7 @@ export class FacebookPlatformService extends BasePlatformService {
         accessToken,
       );
 
-      console.log(`Uploading ${mediaType} to Facebook:`, {
-      pageId,
-      mediaUrl,
-      endpoint,
-      uploadUrl
-    });
-    console.log(`Upload params:`, params);
+      this.logger.log(`Uploading ${mediaType} to Facebook for page ${pageId}`);
 
       const response = await firstValueFrom(
         this.http.post(uploadUrl, null, {
@@ -211,39 +375,42 @@ export class FacebookPlatformService extends BasePlatformService {
         }),
       );
 
-      return response.data?.id || null;
+      const mediaId = response.data?.id;
+      if (!mediaId) {
+        throw new Error('No media ID returned from Facebook');
+      }
+
+      this.logger.log(`Successfully uploaded media with ID: ${mediaId}`);
+      return mediaId;
     } catch (error) {
       this.logger.error(
         `Failed to upload media to Facebook: ${mediaUrl}`,
         error.stack || error.message,
       );
-      return null;
+      throw error; // Re-throw to let caller handle
     }
   }
 
-  private buildScheduleParams(
+  private buildPostScheduleParams(
     post: ScheduledPost,
     accessToken: string,
     mediaAttachments: string[],
   ): Record<string, any> {
-    console.log(`post time`, post.scheduledAt);
-    const localDate = new Date(post.scheduledAt);
-    console.log(` scheduled time  in (utc):`, localDate);
+    const utcSeconds = Math.floor(new Date(post.scheduledAt).getTime() / 1000);
 
-    const utcSeconds = Math.floor(localDate.getTime() / 1000);
-    console.log(`Scheduling Facebook post at UTC time:`, utcSeconds);
+    this.logger.log(`Scheduling Facebook post at UTC time: ${utcSeconds}`);
 
     const params: Record<string, any> = {
       message: post.content,
-      scheduled_publish_time: utcSeconds, 
+      scheduled_publish_time: utcSeconds,
       published: false,
       access_token: accessToken,
     };
 
     if (mediaAttachments.length > 0) {
-      params.attached_media = mediaAttachments.map((id) => ({
-        media_fbid: id,
-      }));
+      params.attached_media = JSON.stringify(
+        mediaAttachments.map((id) => ({ media_fbid: id })),
+      );
     }
 
     return params;
@@ -261,9 +428,9 @@ export class FacebookPlatformService extends BasePlatformService {
     };
 
     if (mediaAttachments.length > 0) {
-      params.attached_media = mediaAttachments.map((id) => ({
-        media_fbid: id,
-      }));
+      params.attached_media = JSON.stringify(
+        mediaAttachments.map((id) => ({ media_fbid: id })),
+      );
     }
 
     return params;
@@ -275,26 +442,27 @@ export class FacebookPlatformService extends BasePlatformService {
     mediaType: 'photo' | 'video' | 'reel',
     accessToken: string,
   ): Record<string, any> {
+    const baseParams = {
+      access_token: accessToken,
+      published: false,
+    };
+
     switch (mediaType) {
       case 'photo':
-        return { url: mediaUrl, published: false, access_token: accessToken };
+        return { ...baseParams, url: mediaUrl };
       case 'video':
-        return {
-          file_url: mediaUrl,
-          published: false,
-          access_token: accessToken,
-        };
+        return { ...baseParams, file_url: mediaUrl };
       case 'reel':
-        return {
-          video_file_url: mediaUrl,
-          published: false,
-          access_token: accessToken,
-        };
+        return { ...baseParams, video_url: mediaUrl };
+      default:
+        throw new Error(`Unsupported media type: ${mediaType}`);
     }
   }
 
   /** Detect media type from URL */
   private detectMediaType(url: string): 'photo' | 'video' | 'reel' {
+    if (!url) return 'photo';
+
     const lowerUrl = url.toLowerCase();
 
     if (lowerUrl.includes('reel')) {
@@ -318,6 +486,11 @@ export class FacebookPlatformService extends BasePlatformService {
       video: 'videos',
       reel: 'video_reels',
     };
+
+    if (!endpoints[mediaType]) {
+      throw new Error(`Unsupported media type: ${mediaType}`);
+    }
+
     return endpoints[mediaType];
   }
 

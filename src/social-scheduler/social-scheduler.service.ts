@@ -15,6 +15,7 @@ import {
   ScheduledPost,
 } from './interfaces/social-scheduler.interface';
 import { InjectQueue } from '@nestjs/bull';
+import { content } from 'pdfkit/js/page';
 
 @Injectable()
 export class SocialSchedulerService {
@@ -37,8 +38,8 @@ export class SocialSchedulerService {
   async schedulePost(
     postId: string,
   ): Promise<{ success: boolean; jobId?: string; error?: string }> {
-       //get post
-      const post = await this.fetchPost(postId);
+    //get post
+    const post = await this.fetchPost(postId);
     try {
       // Determine target platform from post metadata
       const targetPlatform = this.getTargetPlatform(post);
@@ -67,11 +68,11 @@ export class SocialSchedulerService {
 
   async publishImmediately(
     postId: string,
-  ): Promise<{ success: boolean; error?: string }> {
-       //get post
-      const post = await this.fetchPost(postId);
+  ): Promise<{ success: boolean; error?: string; jobId?: string }> {
+    //get post
+    const post = await this.fetchPost(postId);
     try {
-      console.log(post)
+      console.log(post);
       const targetPlatform = this.getTargetPlatform(post);
       const platformService = this.resolvePlatformService(post);
       const platformPost = await this.preparePlatformPost(post);
@@ -92,11 +93,13 @@ export class SocialSchedulerService {
           status: PostStatus.PUBLISHED,
           publishedAt: new Date(),
           platformPostId: result.platformPostId,
+            pageAccountId: post.pageAccount.id,
+            jobId: result.platformPostId,
           metadata: {
             ...((post.metadata as Record<string, any>) || {}),
             publishedPlatform: targetPlatform,
           },
-          queueStatus: ScheduleJobStatus.COMPLETED,
+          queueStatus: ScheduleJobStatus.SCHEDULED,
         },
       });
 
@@ -104,7 +107,7 @@ export class SocialSchedulerService {
         `✅ Published post ${post.id} immediately to ${targetPlatform}`,
       );
 
-      return { success: true };
+      return { success: true, jobId: result.platformPostId };
     } catch (error) {
       await this.handleSchedulingError(post.id, error);
       this.logger.error(
@@ -174,12 +177,7 @@ export class SocialSchedulerService {
       pageAccount.accessToken,
     );
 
-    const mediaFiles = await this.prisma.mediaFile.findMany({
-      where: { id: { in: post.mediaFileIds } },
-      select: { url: true },
-    });
-
-    const mediaUrls = mediaFiles.map((f) => f.url);
+    const mediaUrls = await this.getMediaFiles(post.mediaFileIds || []);
 
     const scheduledPost: ScheduledPost = {
       id: post.id,
@@ -187,6 +185,7 @@ export class SocialSchedulerService {
       mediaUrls,
       scheduledAt: post.scheduledAt,
       metadata: {
+        contentType: post.metadata?.contentType,
         accessToken: decryptedToken,
         pageId: pageAccount.platformPageId,
         pageAccountId: pageAccount.id,
@@ -212,8 +211,9 @@ export class SocialSchedulerService {
       data: {
         jobId: result.platformPostId,
         platformPostId: result.platformPostId,
+        pageAccountId: pageAccount.id,
         status: PostStatus.SCHEDULED,
-        queueStatus: ScheduleJobStatus.PROCESSING,
+        queueStatus: ScheduleJobStatus.SCHEDULED,
         metadata: {
           ...((post.metadata as Record<string, any>) || {}),
           schedulingMethod: 'NATIVE',
@@ -350,7 +350,7 @@ export class SocialSchedulerService {
             publishedPlatform: targetPlatform,
             ...(result.metadata && { platformMetadata: result.metadata }),
           },
-          queueStatus: ScheduleJobStatus.COMPLETED,
+          queueStatus: ScheduleJobStatus.SCHEDULED,
         },
       });
 
@@ -364,10 +364,13 @@ export class SocialSchedulerService {
   }
 
   private async preparePlatformPost(post: any): Promise<ScheduledPost> {
+
+      const mediaUrls = await this.getMediaFiles(post.mediaFileIds || []);
+
     const basePost: ScheduledPost = {
       id: post.id,
       content: post.content,
-      mediaUrls: post.mediaFileIds || [],
+      mediaUrls,
       scheduledAt: post.scheduledAt,
       metadata: {},
     };
@@ -508,7 +511,7 @@ export class SocialSchedulerService {
 
   async cancelScheduledPost(
     postId: string,
-    organizationId: string
+    organizationId: string,
   ): Promise<{ success: boolean; error?: string; message: string }> {
     try {
       const post = await this.prisma.post.findUnique({
@@ -588,10 +591,17 @@ export class SocialSchedulerService {
       });
 
       this.logger.log(`✅ Successfully cancelled post ${postId}`);
-      return { success: true, message: 'Scheduled post cancelled successfully.' };
+      return {
+        success: true,
+        message: 'Scheduled post cancelled successfully.',
+      };
     } catch (error) {
       this.logger.error(`❌ Error cancelling post ${postId}:`, error);
-      return { success: false, error: error.message, message: 'Failed to cancel scheduled post.'};
+      return {
+        success: false,
+        error: error.message,
+        message: 'Failed to cancel scheduled post.',
+      };
     }
   }
 
@@ -644,22 +654,32 @@ export class SocialSchedulerService {
     return service;
   }
 
-private async fetchPost(postId: string): Promise<any> {
-  const post = await this.prisma.post.findUnique({
-    where: { id: postId },
-    include: {
-      socialAccount: {
-        include: {
-          pages: true,
+  private async fetchPost(postId: string): Promise<any> {
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      include: {
+        socialAccount: {
+          include: {
+            pages: true,
+          },
         },
       },
-    },
-  });
+    });
 
-  if (!post) {
-    throw new NotFoundException(`Post ${postId} not found`);
+    if (!post) {
+      throw new NotFoundException(`Post ${postId} not found`);
+    }
+
+    return post;
   }
 
-  return post;
-}
+  private async getMediaFiles(mediaIds: string[]) {
+    const mediaFiles = await this.prisma.mediaFile.findMany({
+      where: { id: { in: mediaIds } },
+      select: { url: true },
+    });
+
+    const mediaUrls = mediaFiles.map((f) => f.url);
+    return mediaUrls;
+  }
 }

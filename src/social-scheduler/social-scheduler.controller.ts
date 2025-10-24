@@ -36,10 +36,10 @@ export class SocialSchedulerController {
     return this.service.schedulePost(postId);
   }
 
-  @Post('publish')
+  @Post(':postId/publish')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Publish a Facebook Page post immediately',
+    summary: 'Publish a post immediately',
     description:
       'Publishes a post (text, image, or video) instantly on a Facebook Page using the Page access token.',
   })

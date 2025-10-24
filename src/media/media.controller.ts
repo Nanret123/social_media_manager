@@ -60,6 +60,7 @@ export class MediaController {
       file,
     );
     return {
+      fileId: result.id,
       url: result.url,
       publicId: result.publicId,
     };

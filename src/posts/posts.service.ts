@@ -39,7 +39,6 @@ export class PostsService {
    * Create a new post
    */
   async createPost(organizationId: string, userId: string, dto: CreatePostDto) {
-
     return this.prisma.$transaction(async (tx) => {
       // 1. Validate inputs and access
       await this.validatePostCreation(organizationId, userId, dto, tx);
@@ -319,19 +318,21 @@ export class PostsService {
     }
 
     /**
-   * ✅ Validate scheduled time (must be future)
-   * dto.scheduledAt is a string like "2025-10-19T16:50:00"
-   * dto.timezone is e.g. "Africa/Lagos"
-   */
-  const localDate = parseISO(dto.scheduledAt); // convert string to Date (interpreted as local)
-  const now = new Date();
+     * ✅ Validate scheduled time (must be future)
+     * dto.scheduledAt is a string like "2025-10-19T16:50:00"
+     * dto.timezone is e.g. "Africa/Lagos"
+     */
+    if (dto.scheduledAt) {
+      const localDate = parseISO(dto.scheduledAt); // convert string to Date (interpreted as local)
+      const now = new Date();
 
-  // Convert the "local" time to actual UTC timestamp for comparison
-  const utcDate = fromZonedTime(localDate, dto.timezone);
+      // Convert the "local" time to actual UTC timestamp for comparison
+      const utcDate = fromZonedTime(localDate, dto.timezone);
 
-  if (isBefore(utcDate, now)) {
-    throw new BadRequestException('Scheduled time must be in the future.');
-  }
+      if (isBefore(utcDate, now)) {
+        throw new BadRequestException('Scheduled time must be in the future.');
+      }
+    }
 
     // Validate media files
     if (dto.mediaFileIds?.length > 0) {
@@ -380,7 +381,7 @@ export class PostsService {
       data: {
         status: PostStatus.PUBLISHED,
         publishedAt: new Date(),
-        queueStatus: 'COMPLETED',
+        queueStatus: 'PUBLISHED',
         errorMessage: null,
         retryCount: 0,
         jobId: null,

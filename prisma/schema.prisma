@@ -100,7 +100,7 @@ model SocialAccount {
   accountType   SocialAccountType    @default(PAGE) // PAGE or PROFILE
   notifications NotificationEntity[]
   conversations Conversation[]
-  pages           PageAccount[]
+  pages         PageAccount[]
 
   @@unique([organizationId, platform, platformAccountId])
   @@index([platform, isActive])
@@ -109,28 +109,28 @@ model SocialAccount {
 }
 
 model PageAccount {
-  id                    String   @id @default(cuid())
-  socialAccountId       String
-  platformPageId        String   // Facebook Page ID
-  name                  String
-  accessToken           String   // Page access token (encrypted)
-  category              String?  // Page category
-  instagramBusinessId   String?  // Linked Instagram account ID
-  instagramUsername     String?  // Linked Instagram username
-  profilePicture        String?  // Page/Instagram profile picture
-  metadata              Json?    // Additional page data
-  
+  id                  String  @id @default(cuid())
+  socialAccountId     String
+  platformPageId      String // Facebook Page ID
+  name                String
+  accessToken         String // Page access token (encrypted)
+  category            String? // Page category
+  instagramBusinessId String? // Linked Instagram account ID
+  instagramUsername   String? // Linked Instagram username
+  profilePicture      String? // Page/Instagram profile picture
+  metadata            Json? // Additional page data
+
   // Relations
-  socialAccount         SocialAccount @relation(fields: [socialAccountId], references: [id])
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
+
   // A page can have posts, metrics, etc.
-   posts            Post[]
+  posts Post[]
   // EngagementMetric EngagementMetric[]
   // conversations    Conversation[]
-  
+
   @@unique([platformPageId])
   @@index([socialAccountId])
   @@index([instagramBusinessId])
@@ -155,9 +155,8 @@ model Post {
 
   maxRetries Int @default(3)
 
-    // Platform metadata
-  platformPostId  String?    // ID returned by platform after publishing
-  
+  // Platform metadata
+  platformPostId String? // ID returned by platform after publishing
 
   // RELATIONS
   author        User?           @relation(fields: [authorId], references: [id], onDelete: Cascade)
@@ -364,19 +363,19 @@ model AiContentGeneration {
 }
 
 model AiImageGeneration {
-  id             String           @id @default(cuid())
+  id             String   @id @default(cuid())
   organizationId String
   userId         String
-  prompt         String           @db.Text
+  prompt         String   @db.Text
   creditsUsed    Int
   imageUrl       String?
   publicId       String?
-  revisedPrompt  String?          @db.Text
-  cost           Float            @default(0)
+  revisedPrompt  String?  @db.Text
+  cost           Float    @default(0)
   provider       String
   model          String
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now())
 
   mediaFiles MediaFile[]
 
@@ -756,12 +755,11 @@ model BrandKit {
   tone       String? // Could use enum or free text
   guidelines Json? // Additional brand guidelines
 
-
   // Status
-  isActive  Boolean   @default(true)
-  isDefault Boolean   @default(false) // Mark as default brand kit
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  isActive  Boolean  @default(true)
+  isDefault Boolean  @default(false) // Mark as default brand kit
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
   organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -1071,10 +1069,11 @@ enum Platform {
 enum ScheduleJobStatus {
   PENDING
   PROCESSING
-  COMPLETED
+  SCHEDULED
   FAILED
   CANCELLED
   QUEUED
+  PUBLISHED
   RETRYING
 }
 

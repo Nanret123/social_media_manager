@@ -15,7 +15,6 @@ import {
   ScheduledPost,
 } from './interfaces/social-scheduler.interface';
 import { InjectQueue } from '@nestjs/bull';
-import { content } from 'pdfkit/js/page';
 
 @Injectable()
 export class SocialSchedulerService {
@@ -72,13 +71,12 @@ export class SocialSchedulerService {
     //get post
     const post = await this.fetchPost(postId);
     try {
-      console.log(post);
       const targetPlatform = this.getTargetPlatform(post);
       const platformService = this.resolvePlatformService(post);
       const platformPost = await this.preparePlatformPost(post);
 
       this.logger.log(
-        `Publishing post ${post.id} immediately to ${targetPlatform}`,
+        `Publishing post ${post.id} immediately to ${targetPlatform}`
       );
 
       const result = await platformService.publishImmediately(platformPost);
@@ -93,7 +91,7 @@ export class SocialSchedulerService {
           status: PostStatus.PUBLISHED,
           publishedAt: new Date(),
           platformPostId: result.platformPostId,
-            pageAccountId: post.pageAccount.id,
+            pageAccountId: platformPost.metadata.pageAccountId,
             jobId: result.platformPostId,
           metadata: {
             ...((post.metadata as Record<string, any>) || {}),
@@ -391,6 +389,7 @@ export class SocialSchedulerService {
           pageId: pageAccount.platformPageId,
           pageAccountId: pageAccount.id,
           targetPlatform,
+          contentType: post.metadata.contentType
         };
 
         // Add Instagram business account ID if targeting Instagram

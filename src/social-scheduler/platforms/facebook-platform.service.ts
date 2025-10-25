@@ -46,8 +46,6 @@ export class FacebookPlatformService extends BasePlatformService {
         return this.schedulePhotoPost(post, accessToken, pageId);
       }
 
-      // Handle text-only posts
-      return this.scheduleTextPost(post, accessToken, pageId);
     }, 'schedule Facebook post');
   }
 
@@ -73,9 +71,6 @@ export class FacebookPlatformService extends BasePlatformService {
       if (mediaType === 'photo') {
         return this.publishPhotoImmediately(post, accessToken, pageId);
       }
-
-      // Handle text-only posts
-      return this.publishTextImmediately(post, accessToken, pageId);
     }, 'publish immediately to Facebook');
   }
 
@@ -143,9 +138,6 @@ export class FacebookPlatformService extends BasePlatformService {
     const response = await firstValueFrom(
       this.http.post(url, null, { params, timeout: this.requestTimeout }),
     );
-    console
-
-    this.logger.log(`Scheduled Facebook post response: ${response.data}`);
 
     return {
       success: true,
@@ -207,31 +199,6 @@ export class FacebookPlatformService extends BasePlatformService {
     };
   }
 
-  /** Schedule text-only post */
-  private async scheduleTextPost(
-    post: ScheduledPost,
-    accessToken: string,
-    pageId: string,
-  ): Promise<PublishingResult> {
-    const params = this.buildPostScheduleParams(post, accessToken, []);
-    const url = `${this.baseUrl}/${pageId}/feed`;
-
-    const response = await firstValueFrom(
-      this.http.post(url, null, { params, timeout: this.requestTimeout }),
-    );
-
-    this.logger.log(
-      `Scheduled Facebook text post response: ${response.data.id}`,
-    );
-
-    return {
-      success: true,
-      platformPostId: response.data.id,
-      publishedAt: post.scheduledAt,
-      metadata: response.data,
-    };
-  }
-
   /** Publish a Facebook video immediately */
   private async publishVideoImmediately(
     post: ScheduledPost,
@@ -259,7 +226,8 @@ export class FacebookPlatformService extends BasePlatformService {
       }),
     );
 
-    this.logger.log(`Video publish response: ${response.data.id}`);
+    console.log('response:', response.data);
+    //this.logger.log(`Video publish response: ${response.data}`);
 
     return {
       success: true,
@@ -323,8 +291,7 @@ export class FacebookPlatformService extends BasePlatformService {
 
     const params = {
       upload_phase: 'finish',           
-      video_id: videoId,                 
-      video_url: videoUrl,               
+      video_id: videoId,                             
       video_state: 'PUBLISHED',    
       description: post.content || '',
       access_token: accessToken,
@@ -340,38 +307,16 @@ export class FacebookPlatformService extends BasePlatformService {
       }),
     );
 
-    this.logger.log(`Reel publish response: ${response.data.id}`);
+    this.logger.log(`Reel publish response: ${response.data}`);
 
     return {
       success: true,
-      platformPostId: response.data.id,
+      platformPostId: response.data.post_id,
       publishedAt: new Date(),
       metadata: response.data,
     };
   }
 
-  /** Publish text-only post immediately */
-  private async publishTextImmediately(
-    post: ScheduledPost,
-    accessToken: string,
-    pageId: string,
-  ): Promise<PublishingResult> {
-    const params = this.buildPublishParams(post, accessToken, []);
-    const url = `${this.baseUrl}/${pageId}/feed`;
-
-    this.logger.log(`Publishing text post immediately for page ${pageId}`);
-
-    const response = await firstValueFrom(
-      this.http.post(url, null, { params, timeout: this.requestTimeout }),
-    );
-
-    return {
-      success: true,
-      platformPostId: response.data.id,
-      publishedAt: new Date(),
-      metadata: response.data,
-    };
-  }
 
   /** Delete a scheduled Facebook post */
   async deleteScheduledPost(

@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { SchedulingService } from './scheduling.service';
 import { SchedulingController } from './scheduling.controller';
-import { BullModule } from '@nestjs/bull';
+import { BullModule } from '@nestjs/bullmq';
 
 @Module({
   imports: [

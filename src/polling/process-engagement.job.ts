@@ -1,5 +1,5 @@
 // src/engagement/workers/engagement.worker.ts
-import { Process, Processor } from '@nestjs/bull';
+import {  Processor } from '@nestjs/bullmq';
 import { Job } from 'bull';
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -12,7 +12,6 @@ export class EngagementWorker {
 
   constructor(private readonly eventEmitter: EventEmitter2) {}
 
-  @Process('process-engagement')
   async processEngagementJob(job: Job<{
     platform: Platform;
     engagementData: any;

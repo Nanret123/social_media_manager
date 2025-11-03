@@ -3,8 +3,10 @@ import { SocialSchedulerService } from './social-scheduler.service';
 import { EncryptionService } from 'src/common/utility/encryption.service';
 import { HttpModule } from '@nestjs/axios';
 import { FacebookPlatformService } from './platforms/facebook-platform.service';
-import { BullModule } from '@nestjs/bull';
+import { BullModule } from '@nestjs/bullmq';
 import { SocialSchedulerController } from './social-scheduler.controller';
+import { InstagramPlatformService } from './platforms/instagram-platform.service';
+import { SocialPostProcessor } from './processors/social-post.processor';
 
 @Module({
   imports: [
@@ -14,10 +16,25 @@ import { SocialSchedulerController } from './social-scheduler.controller';
     }),
     BullModule.registerQueue({
       name: 'social-posting',
+      defaultJobOptions: {
+        removeOnComplete: 50, // Keep last 50 completed jobs
+        removeOnFail: 100, // Keep last 100 failed jobs for debugging
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 5000, // 5 seconds initial delay
+        },
+      },
     }),
   ],
-  controllers: [SocialSchedulerController], 
-  providers: [SocialSchedulerService, FacebookPlatformService, EncryptionService],
+  controllers: [SocialSchedulerController],
+  providers: [
+    SocialSchedulerService,
+    SocialPostProcessor,
+    FacebookPlatformService,
+    InstagramPlatformService,
+    EncryptionService,
+  ],
   exports: [SocialSchedulerService],
 })
 export class SocialSchedulerModule {}

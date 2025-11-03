@@ -1,82 +1,71 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Queue } from 'bullmq';
-import {
-  Platform,
-  Post,
-  PostStatus,
-  ScheduleJobStatus,
-  SocialAccount,
-} from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { Platform, PostStatus, ScheduleJobStatus } from '@prisma/client';
 import { EncryptionService } from 'src/common/utility/encryption.service';
-import { FacebookPlatformService } from './platforms/facebook-platform.service';
+import { PrismaService } from 'src/prisma/prisma.service';
 import {
+  JobData,
   PlatformServiceMap,
+  ProcessJobData,
   ScheduledPost,
 } from './interfaces/social-scheduler.interface';
-import { InjectQueue } from '@nestjs/bull';
+import { FacebookPlatformService } from './platforms/facebook-platform.service';
+import { InstagramPlatformService } from './platforms/instagram-platform.service';
+import { Queue } from 'bullmq';
+import { ScheduleResult, CancelResult } from './types/scheduler.types';
+import { RETRY_CONFIG, ERROR_MESSAGES } from './constants/scheduler.constants';
+import * as moment from 'moment-timezone';
 
 @Injectable()
 export class SocialSchedulerService {
   private readonly logger = new Logger(SocialSchedulerService.name);
   private readonly platformServices: PlatformServiceMap = {};
+  private readonly maxRetryCount = RETRY_CONFIG.MAX_RETRIES;
 
   constructor(
     @InjectQueue('social-posting') private readonly queue: Queue,
     private readonly prisma: PrismaService,
     private readonly facebookService: FacebookPlatformService,
     private readonly encryptionService: EncryptionService,
+    private readonly instagramService: InstagramPlatformService,
   ) {
     this.registerPlatformServices();
   }
 
+
   private registerPlatformServices(): void {
     this.platformServices[Platform.META] = this.facebookService;
+    this.platformServices[Platform.INSTAGRAM] = this.instagramService;
   }
 
-  async schedulePost(
-    postId: string,
-  ): Promise<{ success: boolean; jobId?: string; error?: string }> {
-    //get post
-    const post = await this.fetchPost(postId);
+  async schedulePost(postId: string): Promise<ScheduleResult> {
     try {
-      // Determine target platform from post metadata
-      const targetPlatform = this.getTargetPlatform(post);
+      const post = await this.fetchPost(postId);
 
-      // Use native scheduling only for Facebook Pages (Instagram doesn't support native scheduling)
-      if (targetPlatform === 'FACEBOOK' && this.canUseNativeScheduling(post)) {
-        this.logger.log(
-          `Using native scheduling for Facebook page post ${post.id}`,
-        );
+      // Route based on platform and capabilities
+      if (this.getTargetPlatform(post) === 'INSTAGRAM') {
+        return await this.scheduleInstagramPost(post);
+      }
+
+      if (this.canUseNativeScheduling(post)) {
         return await this.scheduleWithNativeApi(post);
       }
 
-      // Use BullMQ for Instagram and other platforms
-      this.logger.log(
-        `Using BullMQ scheduling for ${targetPlatform} post ${post.id}`,
-      );
       return await this.scheduleWithBullMQ(post);
     } catch (error) {
-      await this.handleSchedulingError(post.id, error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return this.handleSchedulingFailure(postId, error);
     }
   }
 
-  async publishImmediately(
-    postId: string,
-  ): Promise<{ success: boolean; error?: string; jobId?: string }> {
-    //get post
-    const post = await this.fetchPost(postId);
+  async publishImmediately(postId: string): Promise<ScheduleResult> {
     try {
+      const post = await this.fetchPost(postId);
       const targetPlatform = this.getTargetPlatform(post);
       const platformService = this.resolvePlatformService(post);
       const platformPost = await this.preparePlatformPost(post);
 
       this.logger.log(
-        `Publishing post ${post.id} immediately to ${targetPlatform}`
+        `Publishing post ${postId} immediately to ${targetPlatform}`,
       );
 
       const result = await platformService.publishImmediately(platformPost);
@@ -85,275 +74,72 @@ export class SocialSchedulerService {
         throw new Error(result.error || 'Failed to publish immediately');
       }
 
-      await this.prisma.post.update({
-        where: { id: post.id },
-        data: {
-          status: PostStatus.PUBLISHED,
-          publishedAt: new Date(),
-          platformPostId: result.platformPostId,
-            pageAccountId: platformPost.metadata.pageAccountId,
-            jobId: result.platformPostId,
-          metadata: {
-            ...((post.metadata as Record<string, any>) || {}),
-            publishedPlatform: targetPlatform,
-          },
-          queueStatus: ScheduleJobStatus.SCHEDULED,
-        },
-      });
-
-      this.logger.log(
-        `✅ Published post ${post.id} immediately to ${targetPlatform}`,
+      await this.updatePublishedPost(
+        post,
+        result,
+        targetPlatform,
+        platformPost,
       );
 
+      this.logger.log(
+        `✅ Published post ${postId} immediately to ${targetPlatform}`,
+      );
       return { success: true, jobId: result.platformPostId };
     } catch (error) {
-      await this.handleSchedulingError(post.id, error);
+      await this.handleSchedulingError(postId, error);
       this.logger.error(
-        `❌ Failed to publish post ${post.id} immediately: ${error.message}`,
+        `❌ Failed to publish post ${postId} immediately: ${error.message}`,
       );
       return { success: false, error: error.message };
     }
   }
 
-  /**
-   * Determines the target platform (FACEBOOK or INSTAGRAM) from post metadata
-   */
-  private getTargetPlatform(post: any): 'FACEBOOK' | 'INSTAGRAM' {
-    // Check metadata for explicit platform
-    if (post.metadata?.platform === 'INSTAGRAM') {
-      return 'INSTAGRAM';
-    }
-    // Default to FACEBOOK for META accounts
-    return 'FACEBOOK';
-  }
+  async processScheduledPost(data: ProcessJobData): Promise<void> {
+    const { postId, retryCount = 0, containerId } = data;
 
-  /**
-   * Checks if native scheduling can be used (only for Facebook Pages)
-   */
-  private canUseNativeScheduling(post: any): boolean {
-    const sa = post.socialAccount;
+    const post = await this.fetchPost(postId);
 
-    // Must be META platform
-    if (sa.platform !== Platform.META) return false;
-
-    // Must be a PAGE account
-    if (sa.accountType !== 'PAGE') return false;
-
-    // Must have pages data with valid access token
-    if (!sa.pages || sa.pages.length === 0) {
-      this.logger.warn(
-        `Social account ${sa.id} is PAGE type but has no pages data`,
-      );
-      return false;
-    }
-
-    const targetPlatform = this.getTargetPlatform(post);
-
-    // Instagram doesn't support native scheduling via API
-    if (targetPlatform === 'INSTAGRAM') {
-      this.logger.debug('Instagram posts use BullMQ scheduling');
-      return false;
-    }
-
-    return true;
-  }
-
-  private async scheduleWithNativeApi(
-    post: any,
-  ): Promise<{ success: boolean; jobId?: string }> {
-    const pageAccount = post.socialAccount.pages?.[0];
-
-    if (!pageAccount) {
-      throw new Error('No connected page account found for native scheduling');
-    }
-
-    if (!pageAccount.accessToken) {
-      throw new Error('Page account missing access token');
-    }
-
-    const decryptedToken = await this.encryptionService.decrypt(
-      pageAccount.accessToken,
-    );
-
-    const mediaUrls = await this.getMediaFiles(post.mediaFileIds || []);
-
-    const scheduledPost: ScheduledPost = {
-      id: post.id,
-      content: post.content,
-      mediaUrls,
-      scheduledAt: post.scheduledAt,
-      metadata: {
-        contentType: post.metadata?.contentType,
-        accessToken: decryptedToken,
-        pageId: pageAccount.platformPageId,
-        pageAccountId: pageAccount.id,
-        targetPlatform: 'FACEBOOK',
-      },
-    };
-
-    this.logger.debug(`Scheduling post with native Facebook API:`, {
-      postId: post.id,
-      pageId: pageAccount.platformPageId,
-      scheduledAt: post.scheduledAt,
-    });
-
-    const platformService = this.resolvePlatformService(post);
-    const result = await platformService.schedulePost(scheduledPost);
-
-    if (!result.success) {
-      throw new Error(result.error || 'Facebook native scheduling failed');
-    }
-
-    await this.prisma.post.update({
-      where: { id: post.id },
-      data: {
-        jobId: result.platformPostId,
-        platformPostId: result.platformPostId,
-        pageAccountId: pageAccount.id,
-        status: PostStatus.SCHEDULED,
-        queueStatus: ScheduleJobStatus.SCHEDULED,
-        metadata: {
-          ...((post.metadata as Record<string, any>) || {}),
-          schedulingMethod: 'NATIVE',
-          targetPlatform: 'FACEBOOK',
-        },
-      },
-    });
-
-    this.logger.log(
-      `✅ Scheduled post ${post.id} with Facebook native API, platformPostId: ${result.platformPostId}`,
-    );
-
-    return { success: true, jobId: result.platformPostId };
-  }
-
-  private async scheduleWithBullMQ(
-    post: any,
-  ): Promise<{ success: boolean; jobId?: string }> {
-    const scheduledTime = new Date(post.scheduledAt).getTime();
-    const currentTime = new Date().getTime();
-    const delay = Math.max(scheduledTime - currentTime, 0);
-
-    if (delay === 0) {
-      this.logger.warn(
-        `Post ${post.id} scheduled time is in the past, will process immediately`,
-      );
-    }
-
-    const targetPlatform = this.getTargetPlatform(post);
-
-    const job = await this.queue.add(
-      `post-${post.id}`,
-      {
-        postId: post.id,
-        platform: post.socialAccount.platform,
-        targetPlatform,
-      },
-      {
-        delay,
-        jobId: post.id,
-        removeOnComplete: {
-          age: 3600, // Keep for 1 hour
-          count: 1000,
-        },
-        removeOnFail: false, // Keep failed jobs for debugging
-      },
-    );
-
-    await this.prisma.post.update({
-      where: { id: post.id },
-      data: {
-        jobId: job.id,
-        status: PostStatus.SCHEDULED,
-        queueStatus: ScheduleJobStatus.QUEUED,
-        metadata: {
-          ...((post.metadata as Record<string, any>) || {}),
-          schedulingMethod: 'BULLMQ',
-          targetPlatform,
-        },
-      },
-    });
-
-    this.logger.log(
-      `✅ Scheduled post ${post.id} in BullMQ for ${targetPlatform}, delay: ${delay}ms`,
-    );
-
-    return { success: true, jobId: job.id };
-  }
-
-  async processScheduledPost(data: {
-    postId: string;
-    retryCount?: number;
-  }): Promise<void> {
-    const { postId, retryCount = 0 } = data;
-
-    const post = await this.prisma.post.findUnique({
-      where: { id: postId },
-      include: {
-        socialAccount: {
-          include: {
-            pages: true,
-          },
-        },
-      },
-    });
-
-    if (!post) {
-      throw new Error(`Post ${postId} not found`);
-    }
-
-    if (post.status !== PostStatus.SCHEDULED) {
+    if (!this.isPostScheduled(post)) {
       this.logger.warn(
         `Post ${postId} has status ${post.status}, expected SCHEDULED. Skipping.`,
       );
       return;
     }
 
-    const platform = post.socialAccount.platform;
-    const platformService = this.platformServices[platform];
-
-    if (!platformService) {
-      throw new Error(`No platform service found for: ${platform}`);
-    }
-
     try {
-      await this.prisma.post.update({
-        where: { id: postId },
-        data: {
-          status: PostStatus.PUBLISHING,
-          queueStatus: ScheduleJobStatus.PROCESSING,
-          retryCount,
-        },
-      });
+      await this.updatePostStatus(
+        postId,
+        PostStatus.PUBLISHING,
+        ScheduleJobStatus.PROCESSING,
+        retryCount,
+      );
 
       const platformPost = await this.preparePlatformPost(post);
+
+      // Handle Instagram container if present
+      if (this.getTargetPlatform(post) === 'INSTAGRAM' && containerId) {
+        platformPost.metadata.containerId = containerId;
+        this.logger.log(`Publishing Instagram container: ${containerId}`);
+      }
+
+      const platformService = this.resolvePlatformService(post);
       const result = await platformService.publishImmediately(platformPost);
 
       if (!result.success) {
         throw new Error(
-          result.error || `Platform ${platform} returned unsuccessful result`,
+          result.error ||
+            ERROR_MESSAGES.PUBLISH_FAILED(this.getTargetPlatform(post)),
         );
       }
 
-      const targetPlatform = this.getTargetPlatform(post);
-
-      await this.prisma.post.update({
-        where: { id: postId },
-        data: {
-          status: PostStatus.PUBLISHED,
-          publishedAt: new Date(),
-          platformPostId: result.platformPostId,
-          metadata: {
-            ...((post.metadata as Record<string, any>) || {}),
-            publishedPlatform: targetPlatform,
-            ...(result.metadata && { platformMetadata: result.metadata }),
-          },
-          queueStatus: ScheduleJobStatus.SCHEDULED,
-        },
-      });
-
+      await this.markPostAsPublished(
+        postId,
+        result,
+        this.getTargetPlatform(post),
+        post.metadata,
+      );
       this.logger.log(
-        `✅ Successfully published post ${postId} to ${targetPlatform}`,
+        `✅ Successfully published post ${postId} to ${this.getTargetPlatform(post)}`,
       );
     } catch (error) {
       await this.handlePublishingError(postId, error, retryCount);
@@ -361,233 +147,21 @@ export class SocialSchedulerService {
     }
   }
 
-  private async preparePlatformPost(post: any): Promise<ScheduledPost> {
-
-      const mediaUrls = await this.getMediaFiles(post.mediaFileIds || []);
-
-    const basePost: ScheduledPost = {
-      id: post.id,
-      content: post.content,
-      mediaUrls,
-      scheduledAt: post.scheduledAt,
-      metadata: {},
-    };
-
-    const targetPlatform = this.getTargetPlatform(post);
-
-    if (post.socialAccount.platform === Platform.META) {
-      const pageAccount = post.socialAccount.pages?.[0];
-
-      if (pageAccount?.accessToken) {
-        // Facebook/Instagram Page post
-        const decryptedToken = await this.encryptionService.decrypt(
-          pageAccount.accessToken,
-        );
-
-        basePost.metadata = {
-          accessToken: decryptedToken,
-          pageId: pageAccount.platformPageId,
-          pageAccountId: pageAccount.id,
-          targetPlatform,
-          contentType: post.metadata.contentType
-        };
-
-        // Add Instagram business account ID if targeting Instagram
-        if (targetPlatform === 'INSTAGRAM' && pageAccount.instagramBusinessId) {
-          basePost.metadata.instagramBusinessId =
-            pageAccount.instagramBusinessId;
-        }
-      } else {
-        // META Profile post (fallback)
-        const decryptedToken = await this.encryptionService.decrypt(
-          post.socialAccount.accessToken,
-        );
-
-        basePost.metadata = {
-          accessToken: decryptedToken,
-          platformAccountId: post.socialAccount.platformAccountId,
-          targetPlatform,
-        };
-      }
-    } else {
-      // Other platforms
-      const decryptedToken = await this.encryptionService.decrypt(
-        post.socialAccount.accessToken,
-      );
-
-      basePost.metadata = {
-        accessToken: decryptedToken,
-        platformAccountId: post.socialAccount.platformAccountId,
-      };
-    }
-
-    return basePost;
-  }
-
-  private async handleSchedulingError(
-    postId: string,
-    error: any,
-  ): Promise<void> {
-    try {
-      const errorMessage = error?.message || 'Unknown error';
-      this.logger.error(`Scheduling error for post ${postId}:`, errorMessage);
-
-      await this.prisma.post.update({
-        where: { id: postId },
-        data: {
-          status: PostStatus.FAILED,
-          errorMessage: errorMessage.substring(0, 1000),
-          queueStatus: ScheduleJobStatus.FAILED,
-        },
-      });
-    } catch (dbError) {
-      this.logger.error(
-        `Failed to update post ${postId} error status:`,
-        dbError,
-      );
-    }
-  }
-
-  private async handlePublishingError(
-    postId: string,
-    error: any,
-    retryCount: number,
-  ): Promise<void> {
-    try {
-      const post = await this.prisma.post.findUnique({
-        where: { id: postId },
-      });
-
-      if (!post) {
-        this.logger.error(`Post ${postId} not found during error handling`);
-        return;
-      }
-
-      const newRetryCount = retryCount + 1;
-      const maxRetries = post.maxRetries || 3;
-      const canRetry = newRetryCount < maxRetries;
-      const errorMessage = error?.message || 'Unknown error';
-
-      await this.prisma.post.update({
-        where: { id: postId },
-        data: {
-          status: canRetry ? PostStatus.SCHEDULED : PostStatus.FAILED,
-          queueStatus: canRetry
-            ? ScheduleJobStatus.RETRYING
-            : ScheduleJobStatus.FAILED,
-          retryCount: newRetryCount,
-          errorMessage: errorMessage.substring(0, 1000),
-        },
-      });
-
-      if (canRetry) {
-        const delay = Math.pow(2, newRetryCount) * 60 * 1000; // Exponential backoff
-        this.logger.log(
-          `Scheduling retry ${newRetryCount}/${maxRetries} for post ${postId} in ${delay}ms`,
-        );
-
-        await this.queue.add(
-          `retry-${postId}-${newRetryCount}`,
-          { postId, retryCount: newRetryCount },
-          {
-            delay,
-            jobId: `retry-${postId}-${newRetryCount}`,
-            removeOnComplete: true,
-          },
-        );
-      } else {
-        this.logger.error(
-          `Post ${postId} failed permanently after ${maxRetries} attempts: ${errorMessage}`,
-        );
-      }
-    } catch (dbError) {
-      this.logger.error(
-        `Failed to handle publishing error for post ${postId}:`,
-        dbError,
-      );
-    }
-  }
-
   async cancelScheduledPost(
     postId: string,
     organizationId: string,
-  ): Promise<{ success: boolean; error?: string; message: string }> {
+  ): Promise<CancelResult> {
     try {
-      const post = await this.prisma.post.findUnique({
-        where: { id: postId, organizationId },
-        include: {
-          socialAccount: {
-            include: { pages: true },
-          },
-        },
-      });
+      const post = await this.fetchPostWithOrg(postId, organizationId);
+      const metadata = this.extractMetadata(post.metadata);
 
-      if (!post) throw new Error('Post not found');
+      // Execute cancellation steps in parallel where possible
+      await Promise.allSettled([
+        this.cancelPlatformResources(post, metadata),
+        this.removeQueueJobs(postId),
+      ]);
 
-      const metadata =
-        post.metadata &&
-        typeof post.metadata === 'object' &&
-        !Array.isArray(post.metadata)
-          ? (post.metadata as Record<string, any>)
-          : {};
-
-      const platform = metadata.platform as string | undefined;
-      const schedulingMethod = metadata.schedulingMethod as string | undefined;
-
-      // 🟢 If post is for Facebook & natively scheduled, handle directly
-      if (
-        platform === 'FACEBOOK' &&
-        post.platformPostId &&
-        post.status === PostStatus.SCHEDULED &&
-        schedulingMethod === 'NATIVE'
-      ) {
-        const pageAccount = post.socialAccount.pages?.[0];
-        if (!pageAccount?.accessToken)
-          throw new Error('Missing page access token for Facebook post');
-
-        const decryptedToken = await this.encryptionService.decrypt(
-          pageAccount.accessToken,
-        );
-
-        const platformService =
-          this.platformServices[post.socialAccount.platform];
-        if (!platformService?.deleteScheduledPost)
-          throw new Error('Platform service for Facebook not available');
-
-        await platformService.deleteScheduledPost(
-          post.platformPostId,
-          decryptedToken,
-        );
-
-        this.logger.log(
-          `🟢 Cancelled native Facebook scheduled post: ${post.platformPostId}`,
-        );
-      } else {
-        // 🧰 For other platforms (or non-native scheduling): remove from queue
-        const job = await this.queue.getJob(postId);
-        if (job) {
-          await job.remove();
-          this.logger.log(`Removed job ${postId} from BullMQ queue`);
-        }
-
-        // Remove retry jobs if any
-        const retryJobs = await this.queue.getJobs(['delayed', 'waiting']);
-        for (const retryJob of retryJobs) {
-          if (retryJob?.data.postId === postId) {
-            await retryJob.remove();
-            this.logger.log(`Removed retry job for post ${postId}`);
-          }
-        }
-      }
-
-      // 📝 Update DB record
-      await this.prisma.post.update({
-        where: { id: postId },
-        data: {
-          status: PostStatus.CANCELED,
-          queueStatus: ScheduleJobStatus.CANCELLED,
-        },
-      });
+      await this.markPostAsCancelled(postId);
 
       this.logger.log(`✅ Successfully cancelled post ${postId}`);
       return {
@@ -624,61 +198,760 @@ export class SocialSchedulerService {
       };
     } catch (error) {
       this.logger.error('Error getting queue metrics:', error);
-      return {
-        waiting: 0,
-        active: 0,
-        completed: 0,
-        failed: 0,
-        delayed: 0,
-        total: 0,
-      };
+      return this.getEmptyMetrics();
     }
   }
 
-  private resolvePlatformService(post: any) {
-    // For META platform, always use Facebook service (handles both FB and IG)
-    if (post.socialAccount.platform === Platform.META) {
-      return this.facebookService;
+  // ==================== Private Methods ====================
+
+  private async scheduleInstagramPost(post: any): Promise<ScheduleResult> {
+    const platformPost = await this.preparePlatformPost(post);
+    // Create Instagram container
+    this.logger.log(`Creating Instagram container for post ${post.id}`);
+    console.log('Scheduling Instagram post with data:', platformPost);
+    const containerResult =
+      await this.instagramService.schedulePost(platformPost);
+
+    if (!containerResult.success || !containerResult.metadata?.containerId) {
+      throw new Error(
+        containerResult.error || ERROR_MESSAGES.CONTAINER_CREATION_FAILED,
+      );
     }
 
-    // For other platforms, use registered service
-    const service = this.platformServices[post.socialAccount.platform];
+    const containerId = containerResult.metadata.containerId;
+    const delay = this.calculateDelay(post.scheduledAt, post.timezone);
 
+    const job = await this.queueInstagramJob(post, containerId, delay);
+    await this.updateScheduledPost(
+      post.id,
+      String(job.id),
+      containerId,
+      containerResult.metadata,
+    );
+
+    this.logger.log(
+      `✅ Scheduled Instagram post ${post.id}, container: 17846582550594529, delay: ${delay}ms`,
+    );
+     return { success: true, jobId: String(job.id) };
+  }
+
+  private async scheduleWithNativeApi(post: any): Promise<ScheduleResult> {
+    const pageAccount = this.getPageAccount(post);
+    const [decryptedToken, mediaUrls] = await Promise.all([
+      this.encryptionService.decrypt(pageAccount.accessToken),
+      this.getMediaFiles(post.mediaFileIds || []),
+    ]);
+
+    const scheduledPost = this.buildScheduledPost(
+      post,
+      mediaUrls,
+      decryptedToken,
+      pageAccount,
+      'FACEBOOK',
+    );
+    const platformService = this.resolvePlatformService(post);
+
+    const result = await platformService.schedulePost(scheduledPost);
+
+    if (!result.success) {
+      throw new Error(result.error || ERROR_MESSAGES.NATIVE_SCHEDULING_FAILED);
+    }
+
+    await this.updateNativeScheduledPost(
+      post.id,
+      result.platformPostId,
+      pageAccount.id,
+    );
+
+    this.logger.log(
+      `✅ Scheduled post ${post.id} with Facebook native API, platformPostId: ${result.platformPostId}`,
+    );
+    return { success: true, jobId: result.platformPostId };
+  }
+
+  private async scheduleWithBullMQ(post: any): Promise<ScheduleResult> {
+    const delay = this.calculateDelay(post.scheduledAt, post.timezone);
+    const targetPlatform = this.getTargetPlatform(post);
+
+    const job = await this.queueJob(post, targetPlatform, delay);
+    await this.updateBullMQScheduledPost(
+      post.id,
+      String(job.id),
+      targetPlatform,
+    );
+
+    this.logger.log(
+      `✅ Scheduled post ${post.id} in BullMQ for ${targetPlatform}, delay: ${delay}ms`,
+    );
+    return { success: true, jobId: String(job.id) };
+  }
+
+  // Helper Methods
+  private getTargetPlatform(post: any): 'FACEBOOK' | 'INSTAGRAM' {
+    return post.metadata?.platform === 'INSTAGRAM' ? 'INSTAGRAM' : 'FACEBOOK';
+  }
+
+  private canUseNativeScheduling(post: any): boolean {
+    const { socialAccount } = post;
+
+    // Only META platform with PAGE account type can use native scheduling
+    if (
+      socialAccount.platform !== Platform.META ||
+      socialAccount.accountType !== 'PAGE'
+    ) {
+      return false;
+    }
+
+    if (!socialAccount.pages?.length) {
+      this.logger.warn(
+        `Social account ${socialAccount.id} is PAGE type but has no pages data`,
+      );
+      return false;
+    }
+
+    // Instagram posts use BullMQ scheduling
+    if (this.getTargetPlatform(post) === 'INSTAGRAM') {
+      this.logger.debug('Instagram posts use BullMQ scheduling');
+      return false;
+    }
+
+    return true;
+  }
+
+  private isPostScheduled(post: any): boolean {
+    return post.status === PostStatus.SCHEDULED;
+  }
+
+  private calculateDelay(scheduledAt: Date, timezone: string): number {
+    // const scheduledTime = new Date(scheduledAt).getTime();
+    // const currentTime = Date.now();
+    // const delay = Math.max(scheduledTime - currentTime, 0);
+
+    // if (delay === 0) {
+    //   this.logger.warn(
+    //     'Scheduled time is in the past, will process immediately',
+    //   );
+    // }
+
+    // return delay;
+     // Convert local scheduled time to UTC
+ // Parse scheduledAt as a local time in the given timezone
+ console.log(`scheduledAt: ${scheduledAt} timezone: ${timezone}`)
+  const scheduledMoment = moment.tz(scheduledAt, timezone);
+  console.log(`scheduledMoment: ${scheduledMoment}`)
+
+  // Get current time in same timezone
+  const nowMoment = moment.tz(timezone);
+  console.log(`nowMoment: ${nowMoment}`)
+
+  const delay = Math.max(scheduledMoment.diff(nowMoment), 0);
+  console.log(`delay: ${delay}`)
+  return delay;
+  }
+
+  private getPageAccount(post: any) {
+    const pageAccount = post.socialAccount.pages?.[0];
+
+    if (!pageAccount) {
+      throw new Error(ERROR_MESSAGES.NO_PAGE_ACCOUNT);
+    }
+
+    if (!pageAccount.accessToken) {
+      throw new Error(ERROR_MESSAGES.MISSING_ACCESS_TOKEN);
+    }
+
+    return pageAccount;
+  }
+
+  private buildScheduledPost(
+    post: any,
+    mediaUrls: string[],
+    accessToken: string,
+    pageAccount: any,
+    targetPlatform: 'FACEBOOK' | 'INSTAGRAM',
+  ): ScheduledPost {
+    return {
+      id: post.id,
+      content: post.content,
+      mediaUrls,
+      scheduledAt: post.scheduledAt,
+      metadata: {
+        contentType: post.metadata?.contentType,
+        accessToken,
+        pageId: pageAccount.platformPageId,
+        pageAccountId: pageAccount.id,
+        targetPlatform,
+      },
+    };
+  }
+
+  private async preparePlatformPost(post: any): Promise<ScheduledPost> {
+    const [mediaUrls, targetPlatform] = await Promise.all([
+      this.getMediaFiles(post.mediaFileIds || []),
+      Promise.resolve(this.getTargetPlatform(post)),
+    ]);
+
+    const basePost: ScheduledPost = {
+      id: post.id,
+      content: post.content,
+      mediaUrls,
+      scheduledAt: post.scheduledAt,
+      metadata: {},
+    };
+
+    if (post.socialAccount.platform === Platform.META) {
+      return this.prepareMetaPlatformPost(basePost, post, targetPlatform);
+    }
+
+    return this.prepareGenericPlatformPost(basePost, post);
+  }
+
+  private async prepareMetaPlatformPost(
+    basePost: ScheduledPost,
+    post: any,
+    targetPlatform: 'FACEBOOK' | 'INSTAGRAM',
+  ): Promise<ScheduledPost> {
+    const pageAccount = post.socialAccount.pages?.[0];
+    let accessToken: string;
+
+    if (pageAccount?.accessToken) {
+      accessToken = await this.encryptionService.decrypt(
+        pageAccount.accessToken,
+      );
+      basePost.metadata = {
+        accessToken,
+        pageId: pageAccount.platformPageId,
+        pageAccountId: pageAccount.id,
+        targetPlatform,
+        contentType: post.metadata?.contentType,
+      };
+
+      if (targetPlatform === 'INSTAGRAM' && pageAccount.instagramBusinessId) {
+        basePost.metadata.instagramBusinessId = pageAccount.instagramBusinessId;
+      }
+    } else {
+      accessToken = await this.encryptionService.decrypt(
+        post.socialAccount.accessToken,
+      );
+      basePost.metadata = {
+        accessToken,
+        platformAccountId: post.socialAccount.platformAccountId,
+        targetPlatform,
+      };
+    }
+
+    return basePost;
+  }
+
+  private async prepareGenericPlatformPost(
+    basePost: ScheduledPost,
+    post: any,
+  ): Promise<ScheduledPost> {
+    const decryptedToken = await this.encryptionService.decrypt(
+      post.socialAccount.accessToken,
+    );
+
+    basePost.metadata = {
+      accessToken: decryptedToken,
+      platformAccountId: post.socialAccount.platformAccountId,
+    };
+
+    return basePost;
+  }
+
+  private resolvePlatformService(post: any) {
+    if (post.socialAccount.platform === Platform.META) {
+      return this.getTargetPlatform(post) === 'INSTAGRAM'
+        ? this.instagramService
+        : this.facebookService;
+    }
+
+    const service = this.platformServices[post.socialAccount.platform];
     if (!service) {
       throw new Error(
-        `No platform service found for ${post.socialAccount.platform}`,
+        ERROR_MESSAGES.NO_PLATFORM_SERVICE(post.socialAccount.platform),
       );
     }
 
     return service;
   }
 
+  // Queue Management
+  private async queueInstagramJob(
+    post: any,
+    containerId: string,
+    delay: number,
+  ) {
+        console.log(`delsy: ${delay}`)
+    return this.queue.add(
+      `post-${post.id}`,
+      {
+        postId: post.id,
+        platform: post.socialAccount.platform,
+        targetPlatform: 'INSTAGRAM',
+        containerId,
+      } as JobData,
+      {
+        delay,
+        jobId: post.id,
+        removeOnComplete: true,
+        removeOnFail: false, // Keep failed jobs for analysis
+      },
+    );
+  }
+
+  private async queueJob(
+    post: any,
+    targetPlatform: Platform,
+    delay: number,
+  ) {
+    return this.queue.add(
+      `post-${post.id}`,
+      {
+        postId: post.id,
+        platform: post.socialAccount.platform,
+        targetPlatform,
+      } as JobData,
+      {
+        delay,
+        jobId: post.id,
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    );
+  }
+
+  private async removeQueueJobs(postId: string): Promise<void> {
+    try {
+      const jobs = await this.queue.getJobs(['waiting', 'delayed', 'active']);
+      const jobsToRemove = jobs.filter(
+        (job) =>
+          job?.data?.postId === postId ||
+          job?.id === postId ||
+          job?.name === `post-${postId}`,
+      );
+
+      await Promise.allSettled(jobsToRemove.map((job) => job.remove()));
+
+      if (jobsToRemove.length > 0) {
+        this.logger.log(
+          `Removed ${jobsToRemove.length} queue jobs for post ${postId}`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(`Error removing queue jobs for post ${postId}:`, error);
+      throw error;
+    }
+  }
+
+  // Database Operations
   private async fetchPost(postId: string): Promise<any> {
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
       include: {
         socialAccount: {
-          include: {
-            pages: true,
-          },
+          include: { pages: true },
         },
       },
     });
 
     if (!post) {
-      throw new NotFoundException(`Post ${postId} not found`);
+      throw new NotFoundException(ERROR_MESSAGES.POST_NOT_FOUND(postId));
     }
 
     return post;
   }
 
-  private async getMediaFiles(mediaIds: string[]) {
+  private async fetchPostWithOrg(
+    postId: string,
+    organizationId: string,
+  ): Promise<any> {
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId, organizationId },
+      include: {
+        socialAccount: {
+          include: { pages: true },
+        },
+      },
+    });
+
+    if (!post) {
+      throw new Error(ERROR_MESSAGES.POST_NOT_FOUND(postId));
+    }
+
+    return post;
+  }
+
+  private async getMediaFiles(mediaIds: string[]): Promise<string[]> {
+    if (!mediaIds.length) return [];
+
     const mediaFiles = await this.prisma.mediaFile.findMany({
       where: { id: { in: mediaIds } },
       select: { url: true },
     });
 
-    const mediaUrls = mediaFiles.map((f) => f.url);
-    return mediaUrls;
+    return mediaFiles.map((f) => f.url);
+  }
+
+  private async updatePostStatus(
+    postId: string,
+    status: PostStatus,
+    queueStatus: ScheduleJobStatus,
+    retryCount: number,
+  ): Promise<void> {
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: { status, queueStatus, retryCount },
+    });
+  }
+
+  private async updateScheduledPost(
+    postId: string,
+    jobId: string,
+    containerId: string,
+    containerMetadata: any,
+  ): Promise<void> {
+    const existingPost = await this.prisma.post.findUnique({
+      where: { id: postId },
+    });
+
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        jobId,
+        status: PostStatus.SCHEDULED,
+        queueStatus: ScheduleJobStatus.QUEUED,
+        metadata: {
+          ...this.extractMetadata(existingPost.metadata),
+          schedulingMethod: 'INSTAGRAM_CONTAINER',
+          targetPlatform: 'INSTAGRAM',
+          containerId,
+          containerMetadata,
+        },
+      },
+    });
+  }
+
+  private async updateNativeScheduledPost(
+    postId: string,
+    platformPostId: string,
+    pageAccountId: string,
+  ): Promise<void> {
+    const existingPost = await this.prisma.post.findUnique({
+      where: { id: postId },
+    });
+
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        jobId: platformPostId,
+        platformPostId,
+        pageAccountId,
+        status: PostStatus.SCHEDULED,
+        queueStatus: ScheduleJobStatus.SCHEDULED,
+        metadata: {
+          ...this.extractMetadata(existingPost.metadata),
+          schedulingMethod: 'NATIVE',
+          targetPlatform: 'FACEBOOK',
+        },
+      },
+    });
+  }
+
+  private async updateBullMQScheduledPost(
+    postId: string,
+    jobId: string,
+    targetPlatform: 'FACEBOOK' | 'INSTAGRAM',
+  ): Promise<void> {
+    const existingPost = await this.prisma.post.findUnique({
+      where: { id: postId },
+    });
+
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        jobId,
+        status: PostStatus.SCHEDULED,
+        queueStatus: ScheduleJobStatus.QUEUED,
+        metadata: {
+          ...this.extractMetadata(existingPost.metadata),
+          schedulingMethod: 'BULLMQ',
+          targetPlatform,
+        },
+      },
+    });
+  }
+
+  private async updatePublishedPost(
+    post: any,
+    result: any,
+    targetPlatform: string,
+    platformPost: ScheduledPost,
+  ): Promise<void> {
+    await this.prisma.post.update({
+      where: { id: post.id },
+      data: {
+        status: PostStatus.PUBLISHED,
+        publishedAt: new Date(),
+        platformPostId: result.platformPostId,
+        pageAccountId: platformPost.metadata.pageAccountId,
+        jobId: result.platformPostId,
+        metadata: {
+          ...this.extractMetadata(post.metadata),
+          publishedPlatform: targetPlatform,
+          ...(result.metadata && { publishMetadata: result.metadata }),
+        },
+        queueStatus: ScheduleJobStatus.SCHEDULED,
+      },
+    });
+  }
+
+  private async markPostAsPublished(
+    postId: string,
+    result: any,
+    targetPlatform: string,
+    existingMetadata: any,
+  ): Promise<void> {
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        status: PostStatus.PUBLISHED,
+        publishedAt: new Date(),
+        platformPostId: result.platformPostId,
+        metadata: {
+          ...this.extractMetadata(existingMetadata),
+          publishedPlatform: targetPlatform,
+          ...(result.metadata && { platformMetadata: result.metadata }),
+        },
+        queueStatus: ScheduleJobStatus.SCHEDULED,
+      },
+    });
+  }
+
+  private async markPostAsCancelled(postId: string): Promise<void> {
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        status: PostStatus.CANCELED,
+        queueStatus: ScheduleJobStatus.CANCELLED,
+      },
+    });
+  }
+
+  // Error Handling
+  private handleSchedulingFailure(postId: string, error: any): ScheduleResult {
+    this.handleSchedulingError(postId, error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+
+  private async handleSchedulingError(
+    postId: string,
+    error: any,
+  ): Promise<void> {
+    try {
+      const errorMessage = error?.message || 'Unknown error';
+      this.logger.error(`Scheduling error for post ${postId}:`, errorMessage);
+
+      await this.prisma.post.update({
+        where: { id: postId },
+        data: {
+          status: PostStatus.FAILED,
+          errorMessage: errorMessage.substring(0, 1000),
+          queueStatus: ScheduleJobStatus.FAILED,
+        },
+      });
+    } catch (dbError) {
+      this.logger.error(
+        `Failed to update post ${postId} error status:`,
+        dbError,
+      );
+    }
+  }
+
+  private async handlePublishingError(
+    postId: string,
+    error: any,
+    retryCount: number,
+  ): Promise<void> {
+    try {
+      const post = await this.prisma.post.findUnique({ where: { id: postId } });
+      if (!post) {
+        this.logger.error(`Post ${postId} not found during error handling`);
+        return;
+      }
+
+      const newRetryCount = retryCount + 1;
+      const maxRetries = post.maxRetries || this.maxRetryCount;
+      const canRetry = newRetryCount < maxRetries;
+      const errorMessage = error?.message || 'Unknown error';
+
+      const updateData: any = {
+        queueStatus: canRetry
+          ? ScheduleJobStatus.RETRYING
+          : ScheduleJobStatus.FAILED,
+        retryCount: newRetryCount,
+        errorMessage: errorMessage.substring(0, 1000),
+      };
+
+      if (!canRetry) {
+        updateData.status = PostStatus.FAILED;
+        updateData.failedAt = new Date();
+      }
+
+      await this.prisma.post.update({
+        where: { id: postId },
+        data: updateData,
+      });
+
+      if (canRetry) {
+        await this.scheduleRetry(postId, newRetryCount, maxRetries);
+      } else {
+        this.logger.error(
+          `Post ${postId} failed permanently after ${maxRetries} attempts: ${errorMessage}`,
+        );
+      }
+    } catch (dbError) {
+      this.logger.error(
+        `Failed to handle publishing error for post ${postId}:`,
+        dbError,
+      );
+    }
+  }
+
+  private async scheduleRetry(
+    postId: string,
+    retryCount: number,
+    maxRetries: number,
+  ): Promise<void> {
+    const delay =
+      Math.pow(RETRY_CONFIG.BACKOFF_BASE, retryCount) *
+      RETRY_CONFIG.INITIAL_DELAY_MS;
+
+    await this.queue.add(
+      `retry-${postId}-${retryCount}`,
+      {
+        postId,
+        retryCount,
+        isRetry: true,
+      },
+      {
+        delay,
+        jobId: `retry-${postId}-${retryCount}`,
+        removeOnComplete: true,
+        attempts: maxRetries - retryCount,
+      },
+    );
+
+    this.logger.log(
+      `Scheduled retry ${retryCount} for post ${postId} in ${delay}ms`,
+    );
+  }
+
+  // Platform Resource Management
+  private async cancelPlatformResources(
+    post: any,
+    metadata: Record<string, any>,
+  ): Promise<void> {
+    const targetPlatform = metadata.targetPlatform as string | undefined;
+    const schedulingMethod = metadata.schedulingMethod as string | undefined;
+    const containerId = metadata.containerId as string | undefined;
+
+    const cancellationPromises: Promise<void>[] = [];
+
+    if (targetPlatform === 'INSTAGRAM' && containerId) {
+      cancellationPromises.push(
+        this.cancelInstagramContainer(post, containerId),
+      );
+    }
+
+    if (
+      targetPlatform === 'FACEBOOK' &&
+      post.platformPostId &&
+      post.status === PostStatus.SCHEDULED &&
+      schedulingMethod === 'NATIVE'
+    ) {
+      cancellationPromises.push(this.cancelFacebookNativePost(post));
+    }
+
+    await Promise.allSettled(cancellationPromises);
+  }
+
+  private async cancelInstagramContainer(
+    post: any,
+    containerId: string,
+  ): Promise<void> {
+    const pageAccount = post.socialAccount.pages?.[0];
+    if (pageAccount?.accessToken) {
+      try {
+        const decryptedToken = await this.encryptionService.decrypt(
+          pageAccount.accessToken,
+        );
+        await this.instagramService.deleteScheduledPost(
+          containerId,
+          decryptedToken,
+        );
+        this.logger.log(`🗑️ Deleted Instagram container: ${containerId}`);
+      } catch (error) {
+        this.logger.error(
+          `Failed to delete Instagram container ${containerId}:`,
+          error,
+        );
+        throw error;
+      }
+    }
+  }
+
+  private async cancelFacebookNativePost(post: any): Promise<void> {
+    const pageAccount = post.socialAccount.pages?.[0];
+    if (!pageAccount?.accessToken) {
+      throw new Error(
+        'Missing page access token for Facebook post cancellation',
+      );
+    }
+
+    try {
+      const decryptedToken = await this.encryptionService.decrypt(
+        pageAccount.accessToken,
+      );
+      const platformService =
+        this.platformServices[post.socialAccount.platform];
+
+      if (platformService?.deleteScheduledPost) {
+        await platformService.deleteScheduledPost(
+          post.platformPostId,
+          decryptedToken,
+        );
+        this.logger.log(
+          `🗑️ Cancelled native Facebook scheduled post: ${post.platformPostId}`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to cancel Facebook native post ${post.platformPostId}:`,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  // Utility Methods
+  private extractMetadata(metadata: any): Record<string, any> {
+    return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? (metadata as Record<string, any>)
+      : {};
+  }
+
+  private getEmptyMetrics() {
+    return {
+      waiting: 0,
+      active: 0,
+      completed: 0,
+      failed: 0,
+      delayed: 0,
+      total: 0,
+    };
   }
 }

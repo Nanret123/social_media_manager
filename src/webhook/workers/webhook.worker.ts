@@ -1,4 +1,4 @@
-import { Processor, Process } from '@nestjs/bull';
+import { Processor } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { Job } from 'bull';
 import { Platform } from '@prisma/client';
@@ -15,7 +15,7 @@ export class WebhookWorker {
     private readonly webhookProcessingService: WebhookProcessingService,
   ) {}
 
-  @Process('process-webhook')
+ // @Process('process-webhook')
   async processWebhookJob(
     job: Job<{
       platform: Platform;

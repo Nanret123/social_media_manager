@@ -32,10 +32,25 @@ import { MetaModule } from './social-integration/meta/meta.module';
 import { PostPublishingModule } from './post-publishing/post-publishing.module';
 import { SocialSchedulerModule } from './social-scheduler/social-scheduler.module';
 import { BullBoardModule } from './common/bull-boad/bull-board.module';
+import { BullModule } from '@nestjs/bullmq';
 
 
 @Module({
   imports: [
+    // 1. First configure BullMQ root module
+    // BullModule.forRootAsync({
+    //   inject: ['REDIS_CLIENT'],
+    //   useFactory: (redisClient) => ({
+    //     connection: redisClient,
+    //   }),
+    // }),
+    BullModule.forRoot({
+          connection: {
+            host: 'localhost', // Your Redis host
+            port: 6379, // Your Redis port
+          },
+        }),
+
     ConfigModule.forRoot({
       isGlobal: true,
     }),

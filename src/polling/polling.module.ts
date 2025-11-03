@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PollingService } from './polling.service';
 import { PollingController } from './polling.controller';
-import { BullModule } from '@nestjs/bull';
+import { BullModule } from '@nestjs/bullmq';
 import { ScheduleModule } from '@nestjs/schedule';
 import { RateLimitModule } from 'src/rate-limit/rate-limit.module';
 import { LinkedinPollingService } from './linkedin-polling.service';

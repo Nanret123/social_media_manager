@@ -1,15 +1,12 @@
-
-// bull-board.module.ts
-import { Module, NestModule, MiddlewareConsumer, INestApplication, Inject, OnModuleInit } from '@nestjs/common';
-import { BullModule, getQueueToken, InjectQueue } from '@nestjs/bull';
+import { Module, INestApplication, OnModuleInit, Inject } from '@nestjs/common';
+import { BullModule, getQueueToken } from '@nestjs/bullmq';
 import { createBullBoard } from '@bull-board/api';
-import { BullAdapter } from '@bull-board/api/bullAdapter';
+import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
-import { Queue } from 'bull';
+import { Queue } from 'bullmq';
 
 @Module({
   imports: [
-    // Make sure this matches your existing queue name
     BullModule.registerQueue({
       name: 'social-posting',
     }),
@@ -28,7 +25,7 @@ export class BullBoardModule implements OnModuleInit {
     this.serverAdapter.setBasePath(this.basePath);
 
     createBullBoard({
-      queues: [new BullAdapter(this.socialPostingQueue)],
+      queues: [new BullMQAdapter(this.socialPostingQueue)],
       serverAdapter: this.serverAdapter,
     });
   }
@@ -37,3 +34,4 @@ export class BullBoardModule implements OnModuleInit {
     app.use(this.basePath, this.serverAdapter.getRouter());
   }
 }
+

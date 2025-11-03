@@ -18,13 +18,14 @@ export abstract class BasePlatformService {
   abstract deleteScheduledPost(postId: string, accessToken: string): Promise<boolean>;
   //abstract validateCredentials(accessToken: string): Promise<boolean>;
   
-  protected handleError(error: any, operation: string): PublishingResult {
+  protected handleError(error: any, operation: string, context: any): PublishingResult {
     const errorMessage = this.extractErrorMessage(error);
     this.logger.error(`Error during ${operation}: ${errorMessage}`);
     
     return {
       success: false,
       error: errorMessage,
+      context,
     };
   }
 

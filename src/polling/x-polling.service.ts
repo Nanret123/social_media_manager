@@ -1,6 +1,6 @@
 // src/polling/services/x-polling.service.ts
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectQueue } from '@nestjs/bull';
+import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bull';
 import { Platform } from '@prisma/client';
 import { TooManyRequestsException } from 'src/common/filters/too-many-requests.exception';

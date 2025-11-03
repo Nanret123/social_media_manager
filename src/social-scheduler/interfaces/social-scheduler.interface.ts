@@ -21,6 +21,7 @@ export interface PublishingResult {
   publishedAt?: Date;
   error?: string;
   metadata?: any;
+  context?: string;
 }
 
 export interface PlatformServiceMap {
@@ -80,4 +81,15 @@ export interface LinkedInPostParams {
   distribution?: {
     feedDistribution: 'MAIN_FEED' | 'NONE';
   };
+}
+
+export interface JobData {
+  postId: string;
+  platform: Platform;
+  targetPlatform: 'FACEBOOK' | 'INSTAGRAM';
+  containerId?: string;
+}
+
+export interface ProcessJobData extends JobData {
+  retryCount?: number;
 }

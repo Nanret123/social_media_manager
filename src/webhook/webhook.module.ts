@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { WebhookService } from './webhook.service';
 import { WebhookController } from './webhook.controller';
-import { BullModule } from '@nestjs/bull';
+import { BullModule } from '@nestjs/bullmq';
 import { WebhookQueueService } from './queues/webhook-queue.service';
 import { MetaWebhookStrategy } from './strategies/meta-webhook.strategy';
 import { WebhookWorker } from './workers/webhook.worker';
@@ -21,7 +21,7 @@ import { WebhookProcessingService } from './webhook-processing.service';
     WebhookService,
     WebhookQueueService,
      WebhookProcessingService,
-    WebhookWorker,
+   // WebhookWorker,
     MetaWebhookStrategy,
   ],
 })

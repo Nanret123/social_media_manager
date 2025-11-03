@@ -1,22 +1,35 @@
-version: '3.8' # More stable version for compatibility
+version: '3.9'
 
 services:
-  dev-db:
-    image: postgres:latest
-    container_name: emp_dev_db
+  api:
+    build: .
+    container_name: social_media_api
     ports:
-      - '5435:5432'
+      - "3000:3000"
+    env_file: .env
+    depends_on:
+      - postgres
+    networks:
+      - social_network
+    command: npm run start:dev
+
+  postgres:
+    image: postgres:15
+    container_name: social_media_manager_dev_db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: 1234
-      POSTGRES_DB: emp_db
+      POSTGRES_DB: social_media_manager_db
+    ports:
+      - "5435:5432"
     volumes:
       - dev-db-data:/var/lib/postgresql/data
     networks:
-      - emp_network
+      - social_network
 
 networks:
-  emp_network:
+  social_network:
 
 volumes:
   dev-db-data:
+

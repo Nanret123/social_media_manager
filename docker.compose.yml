@@ -1,0 +1,22 @@
+version: '3.8' # More stable version for compatibility
+
+services:
+  dev-db:
+    image: postgres:latest
+    container_name: emp_dev_db
+    ports:
+      - '5435:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: emp_db
+    volumes:
+      - dev-db-data:/var/lib/postgresql/data
+    networks:
+      - emp_network
+
+networks:
+  emp_network:
+
+volumes:
+  dev-db-data:

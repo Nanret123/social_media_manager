@@ -5,6 +5,8 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  UnauthorizedException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PostStatus, Platform, Prisma } from '@prisma/client';
@@ -17,22 +19,26 @@ import { PostPublishingService } from '../post-publishing/post-publishing.servic
 import { UpdatePostDto } from './dto/update-post.dto';
 import { parseISO, isBefore } from 'date-fns';
 import { fromZonedTime } from 'date-fns-tz';
+import { firstValueFrom } from 'rxjs';
+import { EncryptionService } from 'src/common/utility/encryption.service';
+import { HttpService } from '@nestjs/axios';
+import { PostMetadata, FacebookApiResponse, InstagramApiResponse } from './interfaces/index.interface';
 
-interface PostMetadata {
-  options?: Record<string, any>;
-  [key: string]: any;
-}
 
 @Injectable()
 export class PostsService {
   private readonly logger = new Logger(PostsService.name);
   private readonly MAX_RETRIES = 3;
+  private readonly FACEBOOK_API_VERSION = 'v23.0';
+  private readonly FACEBOOK_API_BASE_URL = 'https://graph.facebook.com';
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly approvalsService: ApprovalsService,
     private readonly mediaService: MediaService,
     private readonly postPublishingService: PostPublishingService,
+    private readonly encryptionService: EncryptionService,
+    private readonly http: HttpService,
   ) {}
 
   /**
@@ -533,4 +539,203 @@ export class PostsService {
       },
     };
   }
+
+ async getEngagementByPlatformId(platform: Platform, postId: string) {
+    const { pageAccount, platformPostId } = await this.getPageAccountAndPostId(postId);
+    
+
+    const token =  await this.encryptionService.decrypt(pageAccount.accessToken);
+      
+    
+    return this.fetchPlatformEngagement(platform, platformPostId, token);
+  }
+
+
+  private buildFacebookUrl(postId: string): string {
+    return `${this.FACEBOOK_API_BASE_URL}/${this.FACEBOOK_API_VERSION}/${encodeURIComponent(postId)}`;
+  }
+
+  private handleApiError(error: any, platform: Platform): Error {
+    this.logger.error(`${platform} API error:`, error);
+
+    if (error.response?.status === 400) {
+      return new BadRequestException(
+        `Invalid ${platform} post ID or parameters`,
+      );
+    }
+
+    if (error.response?.status === 401) {
+      return new UnauthorizedException(`Invalid ${platform} access token`);
+    }
+
+    if (error.response?.status === 404) {
+      return new NotFoundException(`${platform} post not found`);
+    }
+
+    if (error.code === 'ECONNABORTED' || error.response?.status >= 500) {
+      return new BadRequestException(
+        `${platform} API is temporarily unavailable`,
+      );
+    }
+
+    return new BadRequestException(
+      `Failed to fetch ${platform} engagement data`,
+    );
+  }
+
+  private async getPageAccountAndPostId(postId: string): Promise<{
+    pageAccount: any;
+    platformPostId: string;
+  }> {
+    try {
+      const post = await this.prisma.post.findUnique({
+        where: { id: postId },
+        select: {
+          platformPostId: true,
+          socialAccount: {
+            select: {
+              platform: true,
+              pages: {
+                select: {
+                  id: true,
+                  accessToken: true,
+                },
+                take: 1,
+              },
+            },
+          },
+        },
+      });
+
+      if (!post) {
+        throw new NotFoundException(`Post not found: ${postId}`);
+      }
+
+      if (!post.socialAccount?.pages?.length) {
+        throw new NotFoundException('No active page account associated with this post');
+      }
+
+      const pageAccount = post.socialAccount.pages[0];
+      
+      if (!pageAccount.accessToken) {
+        throw new InternalServerErrorException('Page account does not have a valid access token');
+      }
+
+      if (!post.platformPostId) {
+        throw new InternalServerErrorException('Post does not have a platformPostId');
+      }
+
+      return {
+        pageAccount: {
+          id: pageAccount.id,
+          accessToken: pageAccount.accessToken,
+          platform: post.socialAccount.platform,
+        },
+        platformPostId: post.platformPostId,
+      };
+
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      this.logger.error(`Failed to get page account for post ${postId}:`, error);
+      throw new InternalServerErrorException('Failed to retrieve post information');
+    }
+  }
+
+  private async fetchPlatformEngagement(
+    platform: Platform,
+    platformPostId: string,
+    accessToken: string,
+  ) {
+    const platformHandlers = {
+      [Platform.FACEBOOK]: () =>
+        this.fetchFacebookPostCounts(platformPostId, accessToken),
+      [Platform.INSTAGRAM]: () =>
+        this.fetchInstagramMediaCounts(platformPostId, accessToken),
+    };
+
+    const handler = platformHandlers[platform];
+    if (!handler) {
+      throw new BadRequestException(`Unsupported platform: ${platform}`);
+    }
+
+    try {
+      return await handler();
+    } catch (error) {
+      this.logger.error(
+        `Failed to fetch ${platform} engagement for post ${platformPostId}:`,
+        error,
+      );
+      throw this.handleApiError(error, platform);
+    }
+  }
+
+  private async fetchFacebookPostCounts(postId: string, accessToken: string) {
+    const url = this.buildFacebookUrl(postId);
+    const params = {
+      fields: 'likes.summary(true).limit(0),comments.summary(true).limit(0)',
+      access_token: accessToken,
+    };
+
+    this.logger.debug(`Fetching Facebook engagement for post: ${postId}`);
+    
+    try {
+      const { data } = await firstValueFrom(
+        this.http.get<FacebookApiResponse>(url, {
+          params,
+          timeout: 10000,
+        }),
+      );
+      this.logger.debug(`Facebook engagement data retrieved for post: ${postId}`);
+      return {
+        platform: Platform.FACEBOOK,
+        postId: postId,
+        likeCount: data?.likes?.summary?.total_count ?? 0,
+        commentCount: data?.comments?.summary?.total_count ?? 0,
+        retrievedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(`Facebook API call failed for post ${postId}:`, {
+        url,
+        error: error.response?.data?.error || error.message,
+      });
+      throw error;
+    }
+  }
+
+  private async fetchInstagramMediaCounts(postId: string, accessToken: string) {
+    const url = this.buildFacebookUrl(postId);
+    const params = {
+      fields: 'like_count,comments_count',
+      access_token: accessToken,
+    };
+
+    this.logger.debug(`Fetching Instagram engagement for post: ${postId}`);
+
+    try {
+      const { data } = await firstValueFrom(
+        this.http.get<InstagramApiResponse>(url, {
+          params,
+          timeout: 10000,
+        }),
+      );
+      this.logger.debug(`Instagram engagement data retrieved for post: ${postId}`);
+      
+      return {
+        platform: Platform.INSTAGRAM,
+        postId: postId,
+        likeCount: data?.like_count ?? 0,
+        commentCount: data?.comments_count ?? 0,
+        retrievedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(`Instagram API call failed for post ${postId}:`, {
+        url,
+        error: error.response?.data?.error || error.message,
+      });
+      throw error;
+    }
+  }
+
 }
